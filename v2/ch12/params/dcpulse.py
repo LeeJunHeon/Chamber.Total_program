@@ -84,6 +84,12 @@ PARAMS: tuple = (
     p("DCP_UNUSED_OFF_WAIT_S", _G, "켠 적 없는 출력 끄기 1회 대기", "s", F, 3.0, 0.5, 60.0, src=f"{_CC}:556 · device/dc_pulse.py:1281"),
     p("DCP_CLEANUP_OFF_WAIT_S", _G, "정리 전 꺼짐 확인 대기", "s", F, 8.0, 0.0, 60.0, src=f"{_CC}:555 · device/dc_pulse.py:569",
       desc="공정 엔진이 끝 정리 때 확인형 OFF 를 기다리는 한도(v1 cleanup)"),
+    p("DCPULSE_COMM_LOSS_ABORT_SEC", _G, "DC Pulse 통신 끊김 공정 중단", "s", F, 30.0, 0.0, 120.0, safety=H,
+      src="v2(P 펄스 전원 끊김 중단 — 사용자 결정 2026-11-27, v1 에 없음 · 규칙 S39)",
+      desc="공정이 DC Pulse 출력을 켠 뒤 DC Pulse 가 이 시간 넘게 읽히지 않으면 그 챔버 공정을 멈춥니다. 끊긴 DC Pulse 의 꺼짐 확인은 "
+           "기다리지 않고, 통신이 돌아왔을 때 공정이 없으면 끄기를 다시 보냅니다. 0 이면 쓰지 않습니다",
+      note="기본 30 s: 판정 주기 DCP_POLL_INTERVAL_S 5 s 와 응답 한도(DCP_TIMEOUT_MS 2.5 s + 2 s)를 더한 약 10 s(폴링 한 번 빠짐)보다 "
+           "길다. 1초 행 품질이 fail(또는 링크가 끊긴 채 stale)인 시간만 센다(S37 과 같은 방식)"),
     *_arc("", "common"),
     *_arc("CH1_", "ch1"),
     *_arc("CH2_", "ch2"),

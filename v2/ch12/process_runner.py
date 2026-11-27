@@ -379,13 +379,13 @@ class StepRunner:
                           _ms(self.cfg, "SHUTDOWN_STEP_TIMEOUT_MS", 2500))
                 if a == "RF_POWER_STOP":
                     lim = rf_power_stop_timeout_ms(self.cfg, self.n, lim)
-                lost = self._plc_lost_skip(a)
+                lost, what, later = self._lost_skip(a)
                 got = self._wait(lambda: ex.over or lost(), lim / 1000.0)
                 if got and not ex.over and lost():
-                    self._log(f"PLC 통신 끊김 — {a} 확인을 기다리지 않고 다음 단계로(다시 연결되면 남은 파워 정리)")
+                    self._log(f"{what} 통신 끊김 — {a} 확인을 기다리지 않고 다음 단계로({later})")
                     with self.lk:
                         if self.expect is ex:
-                            ex.cancel("plc-comm-lost")
+                            ex.cancel("comm-lost")
                             self.expect = None
                     return
                 if not got:
@@ -416,12 +416,23 @@ class StepRunner:
                 ex.cancel("abort")
                 self.expect = None
 
-    def _plc_lost_skip(self, action: str):
-        """S37 PLC 통신 끊김 중단(사유 PLC_COMM_LOST)의 정지 순서에서 PLC 로 끄는 전원 단계면 'PLC 링크 끊김' 판정 함수, 아니면 늘 False."""
-        if action not in PLC_POWER_STOP or self.err.get("code") != "PLC_COMM_LOST":
-            return lambda: False
-        f = getattr(self.h, "plc_down", None)
-        return f if callable(f) else (lambda: False)
+    def _lost_skip(self, action: str):
+        """정지 순서에서 끊긴 장치의 끄기 확인을 기다리지 않을지 — (판정 함수, 장치 이름, 뒤 처리 글).
+        S37 PLC 통신 끊김 중단(PLC_COMM_LOST)이면 PLC 로 끄는 전원 단계, S39 펄스 전원 끊김 중단(RFP_COMM_LOST·DCP_COMM_LOST)이면 그 펄스
+        끄기 단계 — 그 링크가 아직 끊겨 있는 동안 참. 그 밖은 늘 거짓."""
+        code = self.err.get("code")
+        never = (lambda: False), "", ""
+        if action in PLC_POWER_STOP and code == "PLC_COMM_LOST":
+            f = getattr(self.h, "plc_down", None)
+            return (f if callable(f) else (lambda: False)), "PLC", "다시 연결되면 남은 파워 정리"
+        kind = {"RF_PULSE_STOP": ("rfpulse", "RFP_COMM_LOST", "RF Pulse"),
+                "DC_PULSE_STOP": ("dcpulse", "DCP_COMM_LOST", "DC Pulse")}.get(action)
+        if kind is None or code != kind[1]:
+            return never
+        f = getattr(self.h, "pulse_down", None)
+        if not callable(f):
+            return never
+        return (lambda: bool(f(kind[0]))), kind[2], "다시 연결되면 공정이 없을 때 끄기를 다시 보냄"
 
     # ═══════════════════════ 대기·카운트다운(1633-1708) ═══════════════════════
     def _countdown(self, duration_ms: int, msg: str) -> None:

@@ -971,4 +971,18 @@ DECISIONS += [
          where="v2/ch12/drivers/rf.py(op_max·over_limit·xform_write); v2/ch12/params/rf.py·core.py; v2/ch12/recipe_check.py"
                "(rf_operating_max·pc_rf_operating_max·check_norm_params); v2/ch12/blocks.py; v2/ch12/plasma_cleaning.py(_rf_over_limit); "
                "v2/ch12/process_adjust.py; v2/tests/test_rf_limit.py·test_rf.py"),
+    dict(id="D433", title="2026-11-27 RF Pulse·DC Pulse 통신 끊김 중단(S39)·재연결 뒤 끄기(S40) — v1 에 없는 새 규칙(P)",
+         decision="S37 과 같은 방식: 1초 행 품질 chN.rfpulse.q·chN.dcpulse.q 가 fail(또는 링크가 끊긴 채 stale)인 시간을 세고(포트를 잡지 않은 "
+                  "off 는 0), 그 챔버 공정이 그 전원의 켜기 단계(RF_PULSE_START·DC_PULSE_START)를 시작한 뒤·정지 순서 전에 "
+                  "RFPULSE_COMM_LOSS_ABORT_SEC·DCPULSE_COMM_LOSS_ABORT_SEC(기본 30 s, 0~120, 0 = 지금 동작) 이상이면 경고 사건 1번 + 그 챔버 공정 "
+                  "중단(RFP_COMM_LOST·DCP_COMM_LOST — 이름은 챔버K 와 같다). 기본 30 s 는 폴링 한 번 빠짐(RF Pulse 응답 한도 9 s + 판정 주기 8 s ≈ "
+                  "17 s, DC Pulse 4.5 s + 5 s ≈ 10 s)보다 길다. 이 사유로 멈추면 정지 순서의 RF_PULSE_STOP·DC_PULSE_STOP 은 그 링크가 끊겨 있는 동안 "
+                  "꺼짐 확인을 기다리지 않는다(process_runner._lost_skip — 예전에는 RFPULSE_OFF_DEADLINE_S 20 s 넘게 기다림) — 살아 있는 장치 끄기가 "
+                  "판정 뒤 20 s 안에 나간다. S40: 공정·운전이 모두 없을 때 안전 엔진이 그 포트를 잡아(PulsePorts.claim hold — 공정이 잡으면 넘겨줌) "
+                  "연결을 기다리고, 연결되면 그 전원에 끄기를 다시 보낸다(정보 사건 1번 RESIDUAL_POWER_OFF, 보낸 뒤 잡기를 푼다). 공정 중이면 아무것도 "
+                  "하지 않고, 공정이 같은 전원을 잡아 연결되면 공정이 끄므로 다시 보내지 않는다. 정지 순서의 순서·공정 txt 의 v1 문구는 그대로.",
+         reason="사용자 결정 2026-11-27(P)", confirm=False,
+         where="v2/ch12/safety.py(PULSE_DEVS·pulse_armed·_pulse_hit·pulse_reconnect); v2/ch12/safety_rules.py(S39·S40); "
+               "v2/ch12/process_runner.py(_lost_skip); v2/ch12/process_engine.py(pulse_down); v2/ch12/drivers/pulse_port.py(hold); "
+               "v2/ch12/params/rfpulse.py·dcpulse.py; v2/ch12/commands.py; v2/tests/test_pulse_comm_loss.py"),
 ]

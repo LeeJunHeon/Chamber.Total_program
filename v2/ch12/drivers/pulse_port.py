@@ -206,6 +206,7 @@ class PulsePort:
         self.drivers: Dict[Tuple[str, str], Any] = {}   # (chamber, kind) → 드라이버
         self.sources: Dict[Tuple[str, str], Any] = {}   # (chamber, kind) → snapshot_bus.Source
         self.owner: Optional[Tuple[str, str]] = None    # (chamber, kind)
+        self.hold = False                               # P(S40) — 안전 엔진이 끄기를 다시 보내려고 잡은 것(공정이 잡으면 넘겨준다)
         self.worker: Optional[Worker] = None
         self._retired: list = []                        # 놓았지만 스레드가 아직 끝나지 않았을 수 있는 Worker(settled)
         self._lock = threading.RLock()
@@ -221,11 +222,17 @@ class PulsePort:
             self.sources[(chamber, kind)] = source
             source.worker = self.worker if self.owner == (chamber, kind) else None
 
-    def claim(self, kind: str, chamber: str) -> Tuple[bool, str, Optional[dict]]:
-        """(성공, 거부 문구, 소유자 {"ch","kind"}). 같은 챔버·같은 종류의 다시 잡기는 성공(이미 붙은 Worker 유지)."""
+    def claim(self, kind: str, chamber: str, hold: bool = False) -> Tuple[bool, str, Optional[dict]]:
+        """(성공, 거부 문구, 소유자 {"ch","kind"}). 같은 챔버·같은 종류의 다시 잡기는 성공(이미 붙은 Worker 유지).
+        hold=True 는 안전 엔진(S40 — 끊겼던 펄스 전원에 끄기를 다시 보내려고)이 잡는 것: 공정이 잡으면(hold 아님) 그 잡기를 풀고
+        넘겨준다(같은 주소의 다른 종류도 — 공정 시작을 막지 않게). 같은 (챔버, 종류)면 Worker 를 그대로 이어받는다."""
         with self._lock:
+            if self.owner is not None and self.hold and not hold and self.owner != (chamber, kind):
+                self.release()                              # 안전 엔진 잡기 → 공정에 넘김
             if self.owner is not None:
                 if self.owner == (chamber, kind):
+                    if not hold:
+                        self.hold = False                   # 공정이 이어받음
                     return True, "", None
                 o_ch, o_kind = self.owner
                 msg = (f"{KIND_NAME.get(kind, kind)} 시작 불가: 동일 주소({self.endpoint}) 장비를 "
@@ -238,7 +245,7 @@ class PulsePort:
             w = Worker(f"{chamber}.{kind}", transport, writes_allowed=self.writes_allowed,
                        on_event=self.on_event, **drv.worker_params())
             drv.bind(w)
-            self.owner, self.worker = (chamber, kind), w
+            self.owner, self.worker, self.hold = (chamber, kind), w, bool(hold)
             src = self.sources.get((chamber, kind))
             if src is not None:
                 src.worker = w
@@ -251,7 +258,7 @@ class PulsePort:
             if self.owner is None or (chamber is not None and self.owner[0] != chamber):
                 return False
             key, w = self.owner, self.worker
-            self.owner, self.worker = None, None
+            self.owner, self.worker, self.hold = None, None, False
             if w is not None:
                 self._retired.append(w)
             src = self.sources.get(key)
@@ -301,8 +308,21 @@ class PulsePorts:
                 return p
         raise KeyError(f"{chamber}.{kind}")
 
-    def claim(self, kind: str, chamber: str) -> Tuple[bool, str, Optional[dict]]:
-        return self.port_of(kind, chamber).claim(kind, chamber)
+    def claim(self, kind: str, chamber: str, hold: bool = False) -> Tuple[bool, str, Optional[dict]]:
+        return self.port_of(kind, chamber).claim(kind, chamber, hold=hold)
+
+    def held(self, kind: str, chamber: str) -> bool:
+        """안전 엔진이 (chamber, kind) 로 잡고 있는가(S40)."""
+        p = self.port_of(kind, chamber)
+        return p.owner == (chamber, kind) and p.hold
+
+    def release_hold(self, kind: str, chamber: str) -> bool:
+        """안전 엔진 잡기만 푼다(공정이 이어받았으면 그대로)."""
+        p = self.port_of(kind, chamber)
+        with p._lock:
+            if p.owner != (chamber, kind) or not p.hold:
+                return False
+        return p.release(chamber)
 
     def release_chamber(self, chamber: str) -> int:
         """v1 release_pulse_endpoints(ch) — 그 챔버가 가진 점유를 모두 푼다. 푼 개수."""

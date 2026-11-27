@@ -51,9 +51,10 @@ def test_rule_table_has_v1_basis_and_location():
         assert not r.reason or r.reason in codes or r.reason.startswith("E"), (r.id, r.reason)
     assert SR.IMPLEMENTED_IN == {r.id: r.impl for r in SR.RULES}
     from v2.ch12.safety import Ch12Safety
-    assert all(hasattr(Ch12Safety, m) for m in ("all_stop", "first_read", "power_off_only", "comm_loss", "reconnect_read"))
+    assert all(hasattr(Ch12Safety, m) for m in ("all_stop", "first_read", "power_off_only", "comm_loss", "reconnect_read",
+                                                 "pulse_reconnect"))
     eng = {r.id for r in SR.RULES if r.impl.startswith("safety.")}
-    assert eng == set(SR.ENGINE_RULES) == {"S30", "S31", "S32", "S37", "S38"}
+    assert eng == set(SR.ENGINE_RULES) == {"S30", "S31", "S32", "S37", "S38", "S39", "S40"}
     pub = SR.public()
     assert pub["fixed"] is True and len(pub["steps"]) == len(SR.STOP_SEQUENCE) and pub["allStopSequence"]
     assert [s["part"] for s in pub["allStopSequence"]] == ["ch1", "ch2", "pc", "tsp"]

@@ -19,6 +19,14 @@ S37 통신 끊김 공정 중단(v1 에 없음 — 사용자 결정 2026-11-26): 
   전원 켜기 단계(POWER_ON_ACTIONS)를 시작한 뒤·정지 순서 전(power_armed)에만 PLC ≥ PLC_COMM_LOSS_ABORT_SEC 또는 그 챔버 MFC ≥
   MFC_COMM_LOSS_ABORT_SEC 면 경고 사건 1번 + engine.abort(PLC_COMM_LOST·MFC_COMM_LOSS) — 지금 abort 경로(정지 순서) 그대로.
   Plasma Cleaning 은 PC RF 가 켜진 동안(pc_armed) 같은 규칙(PC 가 쓰는 챔버 MFC) → pc.abort. 0 = 끔.
+S39 펄스 전원 통신 끊김 중단(v1 에 없음 — 사용자 결정 2026-11-27, P · S37 과 같은 방식): comm_track 이 chN.rfpulse·chN.dcpulse 의
+  '정상으로 읽히지 않은 시간'도 센다(쓰지 않는 펄스 장비 — 포트를 잡지 않아 off 품질 — 는 0). 챔버 공정이 그 전원의 출력을 켠 뒤
+  (RF_PULSE_START·DC_PULSE_START 단계 시작)·정지 순서 전에만 RFPULSE_COMM_LOSS_ABORT_SEC·DCPULSE_COMM_LOSS_ABORT_SEC 이상이면 경고 사건
+  1번 + engine.abort(RFP_COMM_LOST·DCP_COMM_LOST). 정지 순서는 그 링크가 아직 끊겨 있으면 그 전원의 꺼짐 확인을 기다리지 않는다
+  (process_runner._lost_skip — 살아 있는 장치 끄기가 판정 뒤 20 s 안에). 0 = 끔.
+S40 펄스 전원 재연결 뒤 끄기(같은 결정): S39 로 멈춘 (챔버, 종류)는 공정·운전(챔버·PC·TSP)이 모두 없을 때 그 포트를 안전 엔진이 잡아
+  (PulsePorts.claim hold — 공정이 잡으면 넘겨준다) 연결을 기다리고, 연결되면 그 전원에 끄기를 다시 보낸다(정보 사건 1번 — 보낸 뒤
+  잡기를 푼다). 공정 중이면 아무것도 하지 않는다(공정이 같은 전원을 잡아 연결되면 공정이 끄므로 다시 보내지 않음).
 S38 PLC 재연결 뒤 남은 파워(v1 에 없음 — 같은 결정): PLC 링크가 끊긴 행(fail 이고 링크 끊김)을 본 뒤, 공정·운전이 없는 첫 정상 PLC
   행에서 S31 과 같은 확인으로 남은 PLC D/A 전원만 끈다(reconnect_read). 공정·운전 중이면 아무것도 하지 않고(알림 없음) 모두 대기가
   될 때까지 미룬다(S37 중단 뒤 정지 정리 중에 PLC 가 돌아온 경우 — PC RF 가 켜진 채 남지 않게).
@@ -40,7 +48,12 @@ from v2.ch12 import process_states as PS
 
 FRESH = ("ok", "late")
 POWER_ON_ACTIONS = frozenset({"DC_POWER_SET", "DC2_POWER_SET", "DC_PULSE_START", "RF_PULSE_START", "RF_POWER_SET"})
-COMM_DEVS = ("plc", "ch1.mfc", "ch2.mfc")
+PULSE_DEVS = ("ch1.rfpulse", "ch1.dcpulse", "ch2.rfpulse", "ch2.dcpulse")
+COMM_DEVS = ("plc", "ch1.mfc", "ch2.mfc") + PULSE_DEVS
+# S39 — 펄스 종류마다 (켜기 단계, 설정, 사유, 화면 이름)
+PULSE_RULE = {"rfpulse": ("RF_PULSE_START", "RFPULSE_COMM_LOSS_ABORT_SEC", "RFP_COMM_LOST", "RF Pulse"),
+              "dcpulse": ("DC_PULSE_START", "DCPULSE_COMM_LOSS_ABORT_SEC", "DCP_COMM_LOST", "DC Pulse")}
+PULSE_CODE_KIND = {v[2]: k for k, v in PULSE_RULE.items()}
 FORCE_DEADLINE_S = 4.0            # 의도적 종료 — 콘솔 창 닫기는 약 5 s 안에 끝나야 한다(챔버K 와 같은 여유)
 DC_UNITS = ((1, "ch2.dc.dc1_enable", "plc.dcv_write_0"), (2, "ch2.dc.dc2_enable", "plc.dcv_write_3"))
 RF_UNITS = (("ch2", "ch2.rf.enable", "plc.dcv_write_2", "ch2.rf.fwd_w"), ("pc", "pc.rf.enable", "plc.dcv_write_1", "pc.rf.fwd_w"))
@@ -56,6 +69,14 @@ def rf_zero_off(drv, on_done: Callable[[Optional[str]], None]) -> None:
     drv.ramping_down = True
     drv._stop_done.append(on_done)
     drv._finish_power_off(lambda ok: drv._end(ok, msg="RF 파워 즉시 OFF(프로그램 종료)", idle=True))
+
+
+def pulse_armed(e, action: str) -> bool:
+    """S39 판정 구간 — 이번 공정이 그 펄스 전원의 켜기 단계(action)를 시작했고 정지 순서는 아직."""
+    r = getattr(e, "runner", None)
+    if r is None or not r.is_running or r.shutdown or r.failed or r.stop_requested:
+        return False
+    return any(t[2] == action and not t[4] for t in list(r.trace))
 
 
 def power_armed(e) -> bool:
@@ -85,6 +106,7 @@ class Ch12Safety:
         self._comm_prev_t: Optional[float] = None
         self._comm_fired: Dict[str, str] = {}      # 대상(ch1·ch2·pc) → 사유 — 판정 구간마다 한 번
         self._plc_was_down = False                 # S38 — PLC 링크가 끊긴 행을 봄
+        self.pulse_off_pending: Dict[tuple, dict] = {}   # S40 — (챔버, 종류) → {code, sending} — S39 로 멈춘 펄스 전원
 
     # ───────── 이벤트 ─────────
     def _emit(self, kind: str, rule: str, code: str, detail: str, level: str = "info") -> SafetyEvent:
@@ -172,11 +194,19 @@ class Ch12Safety:
             self._plc_was_down = False                # 공정·운전 중이면 기다림(아무것도 하지 않음) — 모두 대기인 첫 정상 행에서
             self.reconnect_read(view)
         self.comm_loss(view)
+        self.pulse_reconnect()
         self._all_stop_tick()
 
     # ───────── S37 통신 끊김 공정 중단 ─────────
+    def _pulse_drv(self, ch: str, kind: str):
+        return (getattr(self.sys, kind, {}) or {}).get(ch)
+
     def _link_up(self, dev: str) -> Optional[bool]:
-        d = getattr(self.sys, "plc", None) if dev == "plc" else (getattr(self.sys, "mfc", {}) or {}).get(dev.split(".")[0])
+        if dev in PULSE_DEVS:
+            ch, kind = dev.split(".")
+            d = self._pulse_drv(ch, kind)
+        else:
+            d = getattr(self.sys, "plc", None) if dev == "plc" else (getattr(self.sys, "mfc", {}) or {}).get(dev.split(".")[0])
         w = getattr(d, "worker", None)
         try:
             return None if w is None else bool(w.connected)
@@ -190,7 +220,7 @@ class Ch12Safety:
         self._comm_prev_t = now
         for dev in COMM_DEVS:
             q = view.q(dev)
-            if q in FRESH:
+            if q in FRESH or (dev in PULSE_DEVS and q in (None, "off")):    # 펄스는 포트를 놓으면 off — 쓰지 않음(0)
                 self.comm_lost_s[dev] = 0.0
             elif q == "fail" or (q == "stale" and self._link_up(dev) is False):
                 self.comm_lost_s[dev] += dt
@@ -214,6 +244,15 @@ class Ch12Safety:
             return "MFC_COMM_LOSS", f"{ch.upper()} MFC", self.comm_lost_s[dev], lim
         return None
 
+    def _pulse_hit(self, ch: str, e) -> Optional[tuple]:
+        """S39 — (사유, 장치 이름, 끊긴 시간, 기준, 종류) 또는 None. 그 전원의 켜기 단계를 시작한 뒤·정지 순서 전에만."""
+        for kind, (action, key, code, name) in PULSE_RULE.items():
+            lim = self._comm_limit(key)
+            dev = f"{ch}.{kind}"
+            if lim > 0 and dev in self.comm_lost_s and self.comm_lost_s[dev] >= lim and pulse_armed(e, action):
+                return code, f"{ch.upper()} {name}", self.comm_lost_s[dev], lim, kind
+        return None
+
     def pc_armed(self) -> Optional[str]:
         """Plasma Cleaning 이 돌고(정지 요청 없음) PC RF 가 켜져 있으면 PC 가 쓰는 챔버(ch1·ch2), 아니면 None."""
         pc = self.pc
@@ -230,19 +269,23 @@ class Ch12Safety:
         if self.pc is not None:
             targets.append(("pc", self.pc, self.pc_armed()))
         for key, eng, mfc_ch in targets:
-            if mfc_ch is None:
+            pulse = None if key == "pc" else self._pulse_hit(key, eng)        # S39 — 펄스 전원(그 출력을 켠 뒤)
+            if mfc_ch is None and pulse is None:
                 self._comm_fired.pop(key, None)
                 continue
             if key in self._comm_fired:
                 continue
-            hit = self._comm_hit(mfc_ch)
+            hit = (self._comm_hit(mfc_ch) if mfc_ch is not None else None) or (pulse[:4] if pulse else None)
             if hit is None:
                 continue
             code, dev, secs, lim = hit
             self._comm_fired[key] = code
             who = "Plasma Cleaning" if key == "pc" else key.upper()
             detail = f"{who} · {dev} 가 {secs:.0f} s 동안 읽히지 않아 공정을 멈춥니다(기준 {lim:g} s)"
-            self._emit("fired", "S37", code, detail, "warn")
+            rule = "S39" if code in PULSE_CODE_KIND else "S37"
+            self._emit("fired", rule, code, detail, "warn")
+            if rule == "S39":
+                self.pulse_off_pending[(key, PULSE_CODE_KIND[code])] = {"code": code, "sending": False}
             try:
                 if key == "pc":
                     eng.abort(code)
@@ -250,6 +293,53 @@ class Ch12Safety:
                     eng.abort(code, detail, source="SAFETY")
             except Exception as ex:
                 self._emit("error", "S37", "INTERNAL_ERROR", f"{who}: {ex!r}", "error")
+
+    # ───────── S40 펄스 전원 재연결 뒤 끄기 ─────────
+    def pulse_reconnect(self) -> None:
+        """S39 로 멈춘 펄스 전원 — 공정·운전이 모두 없을 때 포트를 잡아 연결되면 끄기를 다시 보낸다(머리말 S40)."""
+        if not self.pulse_off_pending:
+            return
+        ports = getattr(self.sys, "pulse", None)
+        busy = self.any_busy()
+        for key in list(self.pulse_off_pending):
+            ch, kind = key
+            st = self.pulse_off_pending[key]
+            drv = self._pulse_drv(ch, kind)
+            if drv is None or ports is None or self.bench:
+                self.pulse_off_pending.pop(key, None)
+                continue
+            if st["sending"]:
+                continue
+            try:
+                owner, held = ports.owner(kind, ch), ports.held(kind, ch)
+            except Exception:
+                self.pulse_off_pending.pop(key, None)
+                continue
+            if busy:                                    # 공정 중이면 아무것도 하지 않는다
+                if owner == (ch, kind) and not held and self._link_up(f"{ch}.{kind}"):
+                    self.pulse_off_pending.pop(key, None)   # 공정이 그 전원을 잡아 연결됨 — 공정이 끈다
+                continue
+            if owner is None:
+                self._try(lambda: ports.claim(kind, ch, hold=True))   # 연결을 기다린다(다음 행부터 확인)
+                continue
+            if owner != (ch, kind) or not self._link_up(f"{ch}.{kind}"):
+                continue
+            st["sending"] = True
+            name = PULSE_RULE[kind][3]
+            self._emit("info", "S40", "RESIDUAL_POWER_OFF", f"{ch.upper()} {name} 연결이 돌아와 끄기를 다시 보냅니다", "info")
+
+            def done(*_a, _key=key, _kind=kind, _ch=ch) -> None:
+                self.pulse_off_pending.pop(_key, None)
+                self._try(lambda: ports.release_hold(_kind, _ch))
+            if kind == "rfpulse":
+                off = drv.stop_process if drv.off_needs_confirm() else drv.stop_unused
+            else:
+                off = drv.output_off if drv.off_needs_confirm() else drv.output_off_unused
+            try:
+                off(on_done=done)
+            except Exception as ex:
+                done()
+                self._emit("error", "S40", "INTERNAL_ERROR", f"{ch.upper()} {name}: {ex!r}", "error")
 
     # ───────── S31 시작 때 남은 파워 ─────────
     def residual_found(self, view) -> List[tuple]:

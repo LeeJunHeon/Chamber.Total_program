@@ -92,6 +92,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      R: params RF_OPERATING_MAX_W(CH2 RF, 360 W)·PC_RF_OPERATING_MAX_W(Plasma Cleaning, 340 W)·규칙 RF01(둘 다 ≤ RF_MAX_POWER), RF_MAX_POWER
      설명(전원 정격). 넘는 값은 거부 — 레시피 시작 전 확인(RECIPE_PARAM_ERROR 글)·블록 검사·PC 시작(E230)·공정 중 값 바꾸기(adjust max
      = 운전 상한, ADJUST_OUT_OF_RANGE)·드라이버. W→D/A 환산값은 D/A 범위(PLC_DC_POWER_MAX_W)로만 자른다(D432).
+     P: 안전 규칙 S39 펄스 전원 통신 끊김 중단(v1 에 없음 — 사용자 결정 2026-11-27)·S40 펄스 재연결 뒤 끄기, params
+     RFPULSE_COMM_LOSS_ABORT_SEC·DCPULSE_COMM_LOSS_ABORT_SEC(30 s, 0 = 끔), 사유 RFP_COMM_LOST·DCP_COMM_LOST(safety fired S39 warn 한 번 ·
+     run_end 사유), S40 info RESIDUAL_POWER_OFF(끄기를 다시 보냄 한 번). 정지 순서는 끊긴 펄스의 꺼짐 확인을 기다리지 않는다(D433).
 """
 from __future__ import annotations
 

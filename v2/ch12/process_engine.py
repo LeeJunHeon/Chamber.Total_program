@@ -214,6 +214,15 @@ class ProcessEngine(AdjustMixin, GasStepMixin, MonitorTargetMixin, PF.PreflightM
         except Exception:
             return False
 
+    def pulse_down(self, kind: str) -> bool:
+        """그 펄스 전원(rfpulse·dcpulse) 링크가 끊겼는가(S39 정지 순서 — 러너가 그 전원의 꺼짐 확인을 기다리지 않을 때)."""
+        d = (getattr(self.sys, kind, {}) or {}).get(self.ch)
+        w = getattr(d, "worker", None)
+        try:
+            return w is None or not bool(w.connected)
+        except Exception:
+            return False
+
     def shutdown_steps(self) -> list:
         """STOP·이상 중단 정지 순서 — 지금 구간 장비(v1 _create_shutdown_sequence(current_params))."""
         run = self.runs[self.run_idx] if 0 <= self.run_idx < len(self.runs) else None

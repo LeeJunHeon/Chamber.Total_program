@@ -5,7 +5,7 @@ v2/chk/safety_rules.py 와 같은 모양(Rule·Act·SeqStep, 평가 위치·종�
 DC Pulse AUTO_STOP·RF Pulse FORP/REFP·IG 실패·MFC 실패·두께 E848·히터 E830~E833 …)은 엔진·드라이버가 v1 처럼 이미 처리하므로
 표에는 그 위치만 적는다(impl — safety.IMPLEMENTED_IN 과 같은 값). 안전 엔진(safety.Ch12Safety)이 직접 실행하는 것은 v1 의 상위
 동작과 합의된 변경뿐이다: ALL STOP(D05), 프로그램 시작 때 남은 파워 정리(지시 3장 (6) — 챔버K S51), 의도적 종료 때 파워 출력만 끄기
-(챔버K 결정 4), 통신 끊김 공정 중단(S37)·PLC 재연결 뒤 남은 파워 정리(S38).
+(챔버K 결정 4), 통신 끊김 공정 중단(S37)·PLC 재연결 뒤 남은 파워 정리(S38)·펄스 전원 통신 끊김 중단(S39)·펄스 재연결 뒤 끄기(S40).
 '새 판정 규칙 금지'의 예외: S37·S38 은 v1 에 없는 새 규칙이다(사용자 결정 2026-11-26 — 메인 증착 중 PLC·MFC 가 끊겨도 공정이 시간 끝까지
 가고, PLC 로 끄는 전원이 켜진 채 남던 것). 설정 이름은 챔버K 와 같다(PLC_COMM_LOSS_ABORT_SEC·MFC_COMM_LOSS_ABORT_SEC, 0 = 끔). 가스 밸브는 PLC 래더 인터락이라 소프트웨어 규칙 없음(지시 4장), RF/DC 파워는 PLC 인터락이 없어 소프트웨어가 끈다.
 
@@ -239,11 +239,25 @@ RULES: Tuple[Rule, ...] = (
       "때까지 미룸). bench 는 쓰지 않는다",
       "shared", "safety.Ch12Safety.reconnect_read", "v1 에 없음 — 사용자 결정 2026-11-26(F)",
       actions=(Act("RESIDUAL_POWER_OFF"), _note("warn", "RESIDUAL_POWER_OFF")), reason="RESIDUAL_POWER_OFF"),
+    # ── 펄스 전원 통신 끊김(v1 에 없음 — 사용자 결정 2026-11-27, P · S37 과 같은 방식) ──
+    R("S39", "펄스 전원 통신 끊김 공정 중단", "trip", "tick",
+      "챔버 공정이 RF Pulse(DC Pulse) 출력을 켠 뒤(RF_PULSE_START·DC_PULSE_START 단계 시작)부터 정지 순서가 시작되기 전까지, 그 챔버 "
+      "펄스 전원의 1초 행 품질(chN.rfpulse.q·chN.dcpulse.q)이 fail(또는 링크가 끊긴 채 stale)인 시간이 설정 이상이면 그 챔버 공정 중단"
+      "(경고 사건 1번 — 지금 abort 경로). 정지 순서는 그 링크가 아직 끊겨 있으면 그 전원의 꺼짐 확인을 기다리지 않고 다음 단계로(살아 "
+      "있는 장치 끄기가 판정 뒤 20 s 안에). 포트를 잡지 않은(쓰지 않는) 펄스 장비는 세지 않는다. 0 = 끔",
+      "chamber", "safety.Ch12Safety.comm_loss", "v1 에 없음 — 사용자 결정 2026-11-27(P)",
+      ("RFPULSE_COMM_LOSS_ABORT_SEC", "DCPULSE_COMM_LOSS_ABORT_SEC"), "RF Pulse 30 s · DC Pulse 30 s", states=RUN,
+      actions=(_abort("RFP_COMM_LOST"), _abort("DCP_COMM_LOST"), _note("warn", "RFP_COMM_LOST")), reason="RFP_COMM_LOST"),
+    R("S40", "펄스 전원 재연결 뒤 끄기", "recover", "event:pulse_reconnect",
+      "S39 로 멈춘 펄스 전원은 공정·운전(챔버·PC·TSP)이 모두 없을 때 그 포트를 잡아 연결을 기다리고, 연결되면 그 전원에 끄기를 다시 "
+      "보낸다(정보 사건 1번, 보낸 뒤 잡기를 푼다 — 공정이 그 포트를 잡으면 넘겨준다). 공정 중이면 아무것도 하지 않는다. bench 는 쓰지 않는다",
+      "chamber", "safety.Ch12Safety.pulse_reconnect", "v1 에 없음 — 사용자 결정 2026-11-27(P)",
+      actions=(Act("RESIDUAL_POWER_OFF"), _note("info", "RESIDUAL_POWER_OFF")), reason="RESIDUAL_POWER_OFF"),
 )
 
 # 엔진·드라이버가 v1 처럼 이미 처리하는 규칙 — 실행 위치(시험이 표와 같은지 본다)
 IMPLEMENTED_IN: Dict[str, str] = {r.id: r.impl for r in RULES}
-ENGINE_RULES: Tuple[str, ...] = ("S30", "S31", "S32", "S37", "S38")     # 안전 엔진(safety.py)이 직접 실행
+ENGINE_RULES: Tuple[str, ...] = ("S30", "S31", "S32", "S37", "S38", "S39", "S40")     # 안전 엔진(safety.py)이 직접 실행
 
 
 # ───────────── 정지 순서 ─────────────
