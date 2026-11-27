@@ -189,6 +189,22 @@ RF_BLIND_RAMP_SETTLE_S        = 60.0  # 임계값 도달 후 안정화 대기(s)
 RF_BLIND_SETTLE_EARLY_EXIT_REF_W = 1.0    # 안정화 중 REF.p가 이 값 이하면 조기 종료 (0이면 OFF)
 RF_BLIND_RAMP_REACH_TIMEOUT_S = 150.0   # FWD가 임계값 도달 못한 채 blind ramp가 이 시간 넘기면 실패 처리(0이면 OFF)
 
+# RF 연속 안전장치(rf_power.py, direct_mode 아닌 경로만) — 각각 False 면 예전 동작(2026-11-27 CH2 SiN_90W 사고)
+# A. 요구값 상한 = min(RF_MAX_POWER, max(목표 × RATIO, 목표 + MARGIN)). 상한에 닿은 채 FWD < 목표 − 허용오차 가 WAIT 초 연속이면 실패
+RF_FOLLOW_GUARD_ENABLED = True
+RF_FOLLOW_MAX_RATIO = 1.3
+RF_FOLLOW_MIN_MARGIN_W = 10.0
+RF_FOLLOW_WAIT_S = 60.0
+# B. 목표 도달 뒤 REF 한계 = min(RF_REFLECTED_THRESHOLD_W, max(목표 × RATIO, MIN_W)) — 도달 전은 RF_REFLECTED_THRESHOLD_W 그대로
+RF_REF_RATIO_GUARD_ENABLED = True
+RF_REF_RATIO_AFTER_REACH = 0.30
+RF_REF_RATIO_MIN_W = 5.0
+# C. Blind ramp 도달 = FWD ≥ RF_BLIND_RAMP_FWD_THRESHOLD_W 가 N회 연속(N ≤ 1 이면 1회 — 예전과 같음)
+RF_BLIND_REACH_CONSEC_ENABLED = True
+RF_BLIND_REACH_CONSEC_N = 3
+# D. ramp-down 시작값을 실제 출력(최근 FWD) 기준으로 — 출력 없음이면 ramp 없이 0 W 확인 후 SET OFF
+RF_RAMPDOWN_FROM_ACTUAL_ENABLED = True
+
 
 # 보정계수
 RF_PARAM_WATT_TO_DAC = 6.79

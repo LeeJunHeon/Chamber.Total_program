@@ -15,6 +15,7 @@ rf_power.py — asyncio 기반 RF Power 컨트롤러
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
+from collections import deque
 import asyncio
 import contextlib
 import time
@@ -109,6 +110,23 @@ class RFPowerAsync:
         self._ref_check_armed: bool                = False  # REF.p 감시 ON 여부
         self._blind_reach_ts: Optional[float]      = None   # FWD 임계값 도달 시점
         self._blind_ramp_start_ts: Optional[float] = None   # blind ramp 시작 시점(도달 타임아웃 측정용)
+
+        # ★ 안전장치 A~D (direct_mode 아닌 경로만 — reload_runtime_cfg 에서 덮어씀). 각각 False 면 예전 동작
+        self._rf_follow_guard_enabled: bool = True          # A. 요구값 상한 + 추종 실패
+        self._rf_follow_max_ratio: float = 1.3
+        self._rf_follow_min_margin_w: float = 10.0
+        self._rf_follow_wait_s: float = 60.0
+        self._rf_ref_ratio_guard_enabled: bool = True       # B. 목표 도달 뒤 반사파 비율 한계
+        self._rf_ref_ratio_after_reach: float = 0.30
+        self._rf_ref_ratio_min_w: float = 5.0
+        self._rf_blind_reach_consec_enabled: bool = True    # C. Blind 도달 연속 N회
+        self._rf_blind_reach_consec_n: int = 3
+        self._rf_rampdown_from_actual_enabled: bool = True  # D. ramp-down 시작값 = 실제 출력
+        self._follow_acc_s: float = 0.0                     # A: 상한에 닿은 채 못 미친 누적 시간(REF 대기 중은 멈춤)
+        self._follow_last_ts: Optional[float] = None
+        self._blind_consec_n: int = 0                       # C: FWD ≥ Blind 임계 연속 횟수
+        self._no_output_fail: bool = False                  # D: 이번 실패가 '출력 없음'(시작 0 W 시간 초과·저출력 연속)
+        self._recent_fwd: deque = deque(maxlen=3)           # D: 최근 원시 FWD (시각, W) — 0.0 포함
 
         # 상태/측정/목표
         self.state = "IDLE"
@@ -205,6 +223,38 @@ class RFPowerAsync:
             getattr(mod, "RF_BLIND_RAMP_REACH_TIMEOUT_S", getattr(_cfg_common, "RF_BLIND_RAMP_REACH_TIMEOUT_S", self._rf_blind_ramp_reach_timeout_s))
         )
 
+        # ✅ 추가 1-3) 안전장치 A~D (direct_mode 아닌 경로만 적용)
+        self._rf_follow_guard_enabled = bool(
+            getattr(mod, "RF_FOLLOW_GUARD_ENABLED", getattr(_cfg_common, "RF_FOLLOW_GUARD_ENABLED", self._rf_follow_guard_enabled))
+        )
+        self._rf_follow_max_ratio = float(
+            getattr(mod, "RF_FOLLOW_MAX_RATIO", getattr(_cfg_common, "RF_FOLLOW_MAX_RATIO", self._rf_follow_max_ratio))
+        )
+        self._rf_follow_min_margin_w = float(
+            getattr(mod, "RF_FOLLOW_MIN_MARGIN_W", getattr(_cfg_common, "RF_FOLLOW_MIN_MARGIN_W", self._rf_follow_min_margin_w))
+        )
+        self._rf_follow_wait_s = float(
+            getattr(mod, "RF_FOLLOW_WAIT_S", getattr(_cfg_common, "RF_FOLLOW_WAIT_S", self._rf_follow_wait_s))
+        )
+        self._rf_ref_ratio_guard_enabled = bool(
+            getattr(mod, "RF_REF_RATIO_GUARD_ENABLED", getattr(_cfg_common, "RF_REF_RATIO_GUARD_ENABLED", self._rf_ref_ratio_guard_enabled))
+        )
+        self._rf_ref_ratio_after_reach = float(
+            getattr(mod, "RF_REF_RATIO_AFTER_REACH", getattr(_cfg_common, "RF_REF_RATIO_AFTER_REACH", self._rf_ref_ratio_after_reach))
+        )
+        self._rf_ref_ratio_min_w = float(
+            getattr(mod, "RF_REF_RATIO_MIN_W", getattr(_cfg_common, "RF_REF_RATIO_MIN_W", self._rf_ref_ratio_min_w))
+        )
+        self._rf_blind_reach_consec_enabled = bool(
+            getattr(mod, "RF_BLIND_REACH_CONSEC_ENABLED", getattr(_cfg_common, "RF_BLIND_REACH_CONSEC_ENABLED", self._rf_blind_reach_consec_enabled))
+        )
+        self._rf_blind_reach_consec_n = int(
+            getattr(mod, "RF_BLIND_REACH_CONSEC_N", getattr(_cfg_common, "RF_BLIND_REACH_CONSEC_N", self._rf_blind_reach_consec_n))
+        )
+        self._rf_rampdown_from_actual_enabled = bool(
+            getattr(mod, "RF_RAMPDOWN_FROM_ACTUAL_ENABLED", getattr(_cfg_common, "RF_RAMPDOWN_FROM_ACTUAL_ENABLED", self._rf_rampdown_from_actual_enabled))
+        )
+
         # ✅ 추가 2) chamber runtime에서 생성자에 넣어주던 RF 연속파 운전값도 reload 반영
         self._poll_interval_ms = int(
             getattr(mod, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", getattr(_cfg_common, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", self._poll_interval_ms))
@@ -262,6 +312,33 @@ class RFPowerAsync:
     def reflected_wait_timeout_s(self) -> float:
         return float(self._ref_wait_to_s)
 
+    # ======= 안전장치 A~D 판정(모두 direct_mode 가 아닐 때만) =======
+    def _follow_cap_w(self) -> Optional[float]:
+        """A: 요구값 상한(W). 꺼져 있으면 None(예전처럼 RF_MAX_POWER 까지)."""
+        if self._direct_mode or not self._rf_follow_guard_enabled:
+            return None
+        t = float(self.target_power)
+        return min(float(self._rf_max_power),
+                   max(t * float(self._rf_follow_max_ratio), t + float(self._rf_follow_min_margin_w)))
+
+    def _ref_limit(self) -> tuple[float, str]:
+        """B: 지금 적용할 REF 한계와 근거 문구. 꺼져 있거나 목표 도달 전이면 (RF_REFLECTED_THRESHOLD_W, '')."""
+        base = float(self._ref_th_w)
+        after = (self.state == "MAINTAINING") or (self.state == "REF_P_WAITING" and self.previous_state == "MAINTAINING")
+        if self._direct_mode or not self._rf_ref_ratio_guard_enabled or not after:
+            return base, ""
+        t = float(self.target_power)
+        r = float(self._rf_ref_ratio_after_reach)
+        lim = min(base, max(t * r, float(self._rf_ref_ratio_min_w)))
+        return lim, (f" [목표 도달 후 한계 {lim:.1f}W = min(TH {base:.1f}W, max(목표 {t:.1f}W×{r * 100:.0f}%, "
+                     f"최소 {float(self._rf_ref_ratio_min_w):.1f}W))]")
+
+    def _blind_consec_need(self) -> int:
+        """C: Blind 도달에 필요한 연속 횟수(꺼져 있거나 N ≤ 1 이면 1 — 예전과 같음)."""
+        if self._direct_mode or not self._rf_blind_reach_consec_enabled:
+            return 1
+        return max(1, int(self._rf_blind_reach_consec_n))
+
     # ======= 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[RFPowerEvent, None]:
         while True:
@@ -284,6 +361,12 @@ class RFPowerAsync:
         # ★ Blind ramp-up 상태 초기화
         self._blind_reach_ts = None
         self._blind_ramp_start_ts = time.monotonic()   # ★ 도달 타임아웃 측정 시작
+        # ★ 안전장치 A~D 런별 상태 초기화(꺼져 있어도 초기화만 — 동작에는 영향 없음)
+        self._follow_acc_s = 0.0
+        self._follow_last_ts = None
+        self._blind_consec_n = 0
+        self._no_output_fail = False
+        self._recent_fwd.clear()
         # Plasma Cleaning(direct_mode=kick+ramp)에는 blind ramp 적용 안 함 → 즉시 REF 감시 ON
         if getattr(self, "_direct_mode", False):
             self._ref_check_armed = True
@@ -461,7 +544,29 @@ class RFPowerAsync:
         await self._emit_status("RF 파워 ramp-down 시작")
         self._is_ramping_down = True
         self._rampdown_w = self._last_sent_w if self._last_sent_w is not None else float(self.current_power_step)
+        if self._rf_rampdown_from_actual_enabled:           # D: 실제 출력 기준(꺼져 있으면 예전처럼 마지막 요구값부터)
+            self._rampdown_w, _why = self._rampdown_start_from_actual(float(self._rampdown_w))
+            if _why:
+                await self._emit_status(_why)
         self._rampdown_task = asyncio.create_task(self._rampdown_loop(), name="RF_RampDown")
+
+    def _rampdown_start_from_actual(self, start_w: float) -> tuple[float, str]:
+        """D: ramp-down 시작값과 로그 문구(바꾸지 않으면 '').
+        출력 없음(시작 0 W 시간 초과·저출력 연속 실패, 또는 최근 2회 FWD ≤ RF_LOW_POWER_THRESH_W) → 0(ramp 없이 0 W 확인 후 SET OFF).
+        그 밖에 마지막 측정이 폴링 주기 3배 안이면 min(시작값, 최근 FWD 최댓값). 측정이 오래됐으면 그대로."""
+        rec = list(self._recent_fwd)
+        thr = float(self._rf_low_power_thresh_w)
+        last2 = rec[-2:]
+        low2 = len(last2) == 2 and all(f <= thr for _, f in last2)
+        if self._no_output_fail or low2:
+            why = "출력 없음 실패" if self._no_output_fail else f"최근 2회 FWD ≤ {thr:.1f}W"
+            return 0.0, f"RF 출력 없음({why}) → ramp-down 없이 0 W 확인 후 SET OFF (요구값 {start_w:.1f}W)"
+        fresh_s = 3.0 * float(self._poll_interval_ms) / 1000.0
+        if rec and (time.monotonic() - rec[-1][0]) <= fresh_s:
+            mx = max(f for _, f in rec)
+            if mx < start_w:
+                return mx, f"ramp-down 시작값 = 실제 출력: 요구값 {start_w:.1f}W → 최근 FWD 최댓값 {mx:.1f}W"
+        return start_w, ""
 
     # ======= 외부(브리지/UI)에서 전달하는 측정값 =======
     def update_measurements(self, forward_w: float, reflected_w: float):
@@ -473,6 +578,18 @@ class RFPowerAsync:
 
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
+
+        # 0-C) Blind 도달 연속 횟수(측정 수신 경로에서 센다 — 미만이면 0). 꺼져 있으면(필요 1회) 세지 않는다
+        _need = self._blind_consec_need()
+        if _need > 1 and (not self._ref_check_armed):
+            if self.forward_w >= float(self._rf_blind_ramp_fwd_threshold_w):
+                self._blind_consec_n += 1
+                if self._blind_consec_n < _need and self.state == "RAMPING_UP":
+                    self._ev_nowait(RFPowerEvent(kind="status", message=(
+                        f"Blind 임계 도달 {self._blind_consec_n}/{_need}회: FWD={self.forward_w:.1f}W "
+                        f"(임계 {self._rf_blind_ramp_fwd_threshold_w:.1f}W) — 연속 {_need}회 뒤 안정화 대기")))
+            else:
+                self._blind_consec_n = 0
 
         # 0) Blind ramp 도달 감시: FWD가 임계값에 도달하지 못한 채(=REF 감시 ON 전)
         #    설정 시간(기본 60s)을 넘기면 실패 처리. (FWD 정체 → setpoint만 max까지 올라가는 무한 진행 방지)
@@ -495,22 +612,52 @@ class RFPowerAsync:
                 asyncio.create_task(self.cleanup())
                 return
         
+        # 0-A) 요구값이 상한에 닿았는데 FWD 가 목표에 못 미침 — RF_FOLLOW_WAIT_S 연속이면 실패(조정 태스크와 무관하게 측정마다 판정)
+        _cap = self._follow_cap_w()
+        if _cap is not None:
+            _now = time.monotonic()
+            _at_cap = float(self.current_power_step) >= _cap - 1e-6
+            _short = self.forward_w < float(self.target_power) - float(self._rf_tolerance_power)
+            if not (_at_cap and _short):
+                self._follow_acc_s = 0.0
+                self._follow_last_ts = None
+            elif self.state == "REF_P_WAITING":
+                self._follow_last_ts = _now                     # REF 대기 중에는 시간을 진행하지 않는다
+            else:
+                if self._follow_last_ts is not None:
+                    self._follow_acc_s += _now - self._follow_last_ts
+                self._follow_last_ts = _now
+                if self._follow_acc_s >= float(self._rf_follow_wait_s):
+                    self._ev_nowait(RFPowerEvent(kind="status",
+                                                 message="RF 출력이 요구값을 따라오지 않아 RF 공정을 중단합니다."))
+                    _t = float(self.target_power)
+                    msg = (
+                        f"RF 요구값 상한 도달 후 {int(self._rf_follow_wait_s)}s 동안 목표 미달: "
+                        f"요구값={float(self.current_power_step):.1f}W(상한 {_cap:.1f}W = 목표의 "
+                        f"{(_cap / _t * 100.0) if _t > 0 else 0.0:.0f}%), 목표={_t:.1f}W, FWD={self.forward_w:.1f}W "
+                        f"(REF={self.reflected_w:.1f}W)"
+                    )
+                    self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
+                    asyncio.create_task(self.cleanup())
+                    return
+
         # 1) Ref.p 과다 감시 (blind ramp 단계에서는 OFF)
         if self._ref_check_armed:
-            if self.reflected_w > self._ref_th_w:
+            _ref_lim, _ref_why = self._ref_limit()          # B: 목표 도달 뒤 비율 한계(꺼져 있으면 TH 그대로·문구 없음)
+            if self.reflected_w > _ref_lim:
                 if self.state != "REF_P_WAITING":
                     self.previous_state = self.state
                     self.state = "REF_P_WAITING"
                     self._ref_wait_start_ts = time.monotonic()
                     self._ev_nowait(RFPowerEvent(kind="status",
-                                                 message=f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초)"))
+                                                 message=f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초){_ref_why}"))
                 else:
                     if (time.monotonic() - (self._ref_wait_start_ts or 0.0)) > self._ref_wait_to_s:
                         # 실패 처리
                         self._ev_nowait(RFPowerEvent(kind="status", message="Ref.p 안정화 시간 초과. 즉시 중단합니다."))
                         msg = (
                             f"Ref.p(REF) 안정화 시간({int(self._ref_wait_to_s)}s) 초과: "
-                            f"REF={self.reflected_w:.1f}W > TH={self._ref_th_w:.1f}W"
+                            f"REF={self.reflected_w:.1f}W > TH={_ref_lim:.1f}W{_ref_why}"
                         )
                         self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
                         asyncio.create_task(self.cleanup())
@@ -542,6 +689,7 @@ class RFPowerAsync:
                         kind="status",
                         message="Forward power가 너무 낮아 RF 공정을 중단합니다."
                     ))
+                    self._no_output_fail = True             # D: 출력 없음 실패 → 정지 때 ramp 없이 0 W
                     self._ev_nowait(RFPowerEvent(
                         kind="target_failed",
                         message=(
@@ -580,7 +728,11 @@ class RFPowerAsync:
                 ref = next((res[k] for k in ("reflected", "ref") if res.get(k) is not None), 0.0)
                 fwd = None if fwd is None else float(fwd)
                 ref = None if ref is None else float(ref)
+            if fwd is not None:
+                self._recent_fwd.append((time.monotonic(), float(fwd)))   # D: 원시 FWD(0.0 포함) — 아래 0.0 건너뛰기보다 먼저
             if fwd == 0.0 and self.state in ("RAMPING_UP", "BLIND_SETTLE"):
+                if self._blind_consec_need() > 1:
+                    self._blind_consec_n = 0                              # C: 0.0 도 임계 미만 측정
                 # 시작 구간의 0.0 W 는 램프·저출력 판정에 넣지 않는다(예전처럼 기다림) — 장비가 SET ON 뒤 수십 초
                 # 0.0 을 읽다가 출력이 나오는 경우가 있다(2026-10-18 PC 런: 44초 0.0 뒤 50 W 정상 도달).
                 # 대신 끝없이 기다리지 않게 시작 뒤 RF_BLIND_RAMP_REACH_TIMEOUT_S(150초) 동안 계속 0.0 이면 실패.
@@ -601,6 +753,7 @@ class RFPowerAsync:
         el = time.monotonic() - self._blind_ramp_start_ts
         if el > to:
             self._ev_nowait(RFPowerEvent(kind="status", message="RF 출력이 나오지 않아 RF 공정을 중단합니다."))
+            self._no_output_fail = True                                   # D: 출력 없음 실패 → 정지 때 ramp 없이 0 W
             self._ev_nowait(RFPowerEvent(
                 kind="target_failed",
                 message=f"Blind ramp 도달 시간({int(to)}s) 초과: 시작 뒤 FWD 0.0 W(출력 없음)"))
@@ -720,7 +873,8 @@ class RFPowerAsync:
             if self.state == "RAMPING_UP":
                 # ★ Blind ramp 단계: FWD가 임계값 도달 → 안정화 대기 단계로 전환
                 if (not self._ref_check_armed) and \
-                   self.forward_w >= float(self._rf_blind_ramp_fwd_threshold_w):
+                   self.forward_w >= float(self._rf_blind_ramp_fwd_threshold_w) and \
+                   (self._blind_consec_need() <= 1 or self._blind_consec_n >= self._blind_consec_need()):
                     self.state = "BLIND_SETTLE"
                     self._blind_reach_ts = time.monotonic()
                     await self._emit_status(
@@ -737,6 +891,11 @@ class RFPowerAsync:
                 if abs(diff) <= float(self._rf_tolerance_power):
                     await self._emit_status(f"{self.target_power:.1f}W 도달. 파워 유지 시작")
                     self.state = "MAINTAINING"
+                    # B: 목표가 Blind 임계 바로 위라 REF 감시가 안 켜진 채 도달했으면 여기서 켠다
+                    if (not self._ref_check_armed) and self._rf_ref_ratio_guard_enabled and not self._direct_mode:
+                        self._ref_check_armed = True
+                        _lim, _ = self._ref_limit()
+                        await self._emit_status(f"목표 도달 → REF.p 감시 ON (한계 {_lim:.1f}W)")
                     # ⛔ 목표값 재전송하지 않음 — 직전에 forward를 만들어낸 setpoint를 그대로 유지
                     if self._last_sent_w is not None:
                         self.current_power_step = float(self._last_sent_w)
@@ -753,9 +912,13 @@ class RFPowerAsync:
                         )
                     else:
                         # setpoint가 이미 target인데 FWD 못 미침 → 3W fine-tuning
+                        _upper = float(self._rf_max_power)
+                        _cap = self._follow_cap_w()             # A: 요구값 상한(꺼져 있으면 None)
+                        if _cap is not None:
+                            _upper = min(_upper, _cap)
                         new_power = min(
                             self.current_power_step + float(self._rf_ramp_fine_up_step),
-                            float(self._rf_max_power),
+                            _upper,
                         )
                 else:
                     # ★ overshoot: _rf_ramp_down_step(1W/s)으로 하강
@@ -826,6 +989,9 @@ class RFPowerAsync:
                 # ✅ 누적 기준을 항상 current_power_step으로
                 base = self.current_power_step
                 new_power = max(0.0, min(float(self._rf_max_power), float(base) + step))
+                _cap = self._follow_cap_w()                     # A: 요구값 상한(꺼져 있으면 None)
+                if _cap is not None:
+                    new_power = min(new_power, _cap)
 
                 # ✅ 다음 루프에서도 누적되도록 항상 갱신
                 self.current_power_step = float(new_power)
