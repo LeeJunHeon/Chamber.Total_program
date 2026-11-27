@@ -148,7 +148,7 @@ def test_settings_clamps_like_v1():
                         CH2_THICKNESS_CMD_TIMEOUT_S=5.0), "ch2")
     assert (s.poll_s, s.stale_s, s.cmd_timeout_s) == (0.25, 2.0, 5.0) and not s.warnings
     s = D.settings(dict(CFG, CH1_SUPPORTS_THICKNESS=True), "ch1")
-    assert not s.enabled and "끔" in s.warnings[0]                     # 포트 0 이면 사용으로 켜도 끈다
+    assert not s.enabled and "두께 모니터 사용하지 않음" in s.warnings[0]   # 포트 0 이면 사용으로 켜도 끈다(C — 화면 글 '끔' 대신)
 
 
 # ───────── 장치 명령: v1 골든 대본 ─────────
