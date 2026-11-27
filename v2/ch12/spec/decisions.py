@@ -957,4 +957,18 @@ DECISIONS += [
                   "'정상 종료. 이 창을 닫아도 됩니다'. venv 선택·우선순위(프로그램이 BelowNormal)·UTF-8 은 그대로. 윈도우에서만 확인된다.",
          reason="사용자 지시 2026-11-24(⑦)", confirm=False,
          where="v2/run_ch12_sim.cmd; v2/run_ch12_sim_robot_server.cmd; v2/ch12/app.py(CLOSE_LINE); v2/robot_server/app.py; v2/tests/test_pack.py"),
+    dict(id="D432", title="2026-11-27 RF 운전 상한 — 환산값은 D/A 범위로만 자르고, 넣을 수 있는 W 는 RF_OPERATING_MAX_W·PC_RF_OPERATING_MAX_W(R)",
+         decision="D136('v1 과 같게')을 RF_MAX_POWER 의 이 쓰임 하나만 바꾼다. v1 은 RF W→D/A 환산값 a·W+b 를 RF_MAX_POWER(600)로 잘라 CH2 RF 는 "
+                  "약 361 W, Plasma Cleaning 은 약 345 W 에서 막혔다(그보다 큰 레시피는 받아들인 뒤 목표에 닿지 못함). v2: drivers/rf.py "
+                  "xform_write 는 D/A 범위(PLC_DC_POWER_MAX_W)로만 자르고, 새 설정 RF_OPERATING_MAX_W(CH2, 기본 360 W)·PC_RF_OPERATING_MAX_W"
+                  "(Plasma Cleaning, 기본 340 W, 둘 다 1~RF_MAX_POWER — 규칙 RF01)을 넘는 값은 고쳐 쓰지 않고 거부한다: 레시피 시작 전 확인"
+                  "(check_norm_params — RECIPE_PARAM_ERROR), 블록 레시피 검사(power_on rf_power), Plasma Cleaning 시작(E230 — 팝업은 상한, 상세는 "
+                  "설정 이름), 공정 중 값 바꾸기(adjust max = 운전 상한 — ADJUST_OUT_OF_RANGE), 드라이버(start BAD_ARGS·retarget None). "
+                  "보내는 W(램프·보정·유지)도 운전 상한까지 — v1 은 보정으로 목표를 넘겨 올리면 환산값 600 에서 막혔다. RF_MAX_POWER 는 전원 "
+                  "정격으로 남긴다(운전 상한의 위 한도·RF Pulse 공정 중 값 바꾸기 상한 D402·RF_POWER_STOP 대기 시간 계산). 기본값은 v1 에서 실제로 "
+                  "나가던 최대보다 낮아 장비 출력이 달라지지 않는다 — 상한 이하 모든 W(CH2 0~360·PC 0~340, 1 W 간격)에서 PLC D/A 코드가 v1 과 같다.",
+         reason="사용자 결정 2026-11-27(R)", confirm=False,
+         where="v2/ch12/drivers/rf.py(op_max·over_limit·xform_write); v2/ch12/params/rf.py·core.py; v2/ch12/recipe_check.py"
+               "(rf_operating_max·pc_rf_operating_max·check_norm_params); v2/ch12/blocks.py; v2/ch12/plasma_cleaning.py(_rf_over_limit); "
+               "v2/ch12/process_adjust.py; v2/tests/test_rf_limit.py·test_rf.py"),
 ]

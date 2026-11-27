@@ -88,6 +88,10 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      G: 윈도우 절전 막기 — params KEEP_AWAKE(always·run·off, 기본 always), eventKinds selfwatch/keep_awake_on·keep_awake_off(상세).
      H: snapshot {ch2,pc}.rf.cmd_on — 래치를 못 읽은 tick(명령 양보)은 마지막 래치 값을 3 s 까지, 명령으로 끈 뒤 5 s 는 uncommanded 아님
      (A/D 가 내려가는 중), params ZERO_WAIT_MAX_SEC(영점 조건 기다림 한도 30 s — mfc/zero_wait·zero_skipped 그대로).
+  19 2026-11-27 RF 운전 상한·펄스 전원 끊김 중단·챔버K 와 이름 맞추기·전원 설정 경고(R·P·N·W — 같은 판에 차례로 더해진다).
+     R: params RF_OPERATING_MAX_W(CH2 RF, 360 W)·PC_RF_OPERATING_MAX_W(Plasma Cleaning, 340 W)·규칙 RF01(둘 다 ≤ RF_MAX_POWER), RF_MAX_POWER
+     설명(전원 정격). 넘는 값은 거부 — 레시피 시작 전 확인(RECIPE_PARAM_ERROR 글)·블록 검사·PC 시작(E230)·공정 중 값 바꾸기(adjust max
+     = 운전 상한, ADJUST_OUT_OF_RANGE)·드라이버. W→D/A 환산값은 D/A 범위(PLC_DC_POWER_MAX_W)로만 자른다(D432).
 """
 from __future__ import annotations
 
@@ -103,7 +107,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 18
+EXPORT_VERSION = 19
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

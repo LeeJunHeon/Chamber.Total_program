@@ -207,6 +207,26 @@ def check_dc_pulse(p: Mapping[str, Any]) -> List[str]:
     return errs
 
 
+def _op_max(cfg: Mapping[str, Any], key: str) -> float:
+    rated = float(cfg.get("RF_MAX_POWER", 600.0) or 0.0)
+    try:
+        v = float(cfg.get(key, rated))
+    except (TypeError, ValueError):
+        v = rated
+    return max(0.0, min(rated, v))
+
+
+def rf_operating_max(cfg: Mapping[str, Any]) -> float:
+    """CH2 RF 운전 상한 W(R — 사용자 결정 2026-11-27, D432): RF_OPERATING_MAX_W(없으면 RF_MAX_POWER), 전원 정격보다 크지 않게.
+    드라이버(drivers/rf.py op_max)·공정 중 값 바꾸기·레시피 검사가 같은 값."""
+    return _op_max(cfg, "RF_OPERATING_MAX_W")
+
+
+def pc_rf_operating_max(cfg: Mapping[str, Any]) -> float:
+    """Plasma Cleaning RF 운전 상한 W(R) — PC_RF_OPERATING_MAX_W(없으면 RF_MAX_POWER)."""
+    return _op_max(cfg, "PC_RF_OPERATING_MAX_W")
+
+
 def heater_limit_c(cfg: Mapping[str, Any]) -> float:
     """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152 의 클램프(SV ≤0 → 500, MAX_TEMP 가 0 이하거나
     SV 상한보다 크면 SV 상한). 래더 상한(LADDER_SV_MAX_C) 클램프는 v2 파라미터 범위(params/core_heater.py ≤900)가 대신한다.
@@ -290,6 +310,14 @@ def check_norm_params(p: dict, chamber: int, caps: Caps, cfg: Mapping[str, Any],
             errs.append("DC2 Target Power(W)는 0 이상이어야 합니다.")
         if p.get("use_dc_power2") and not caps.dc2:
             errs.append("DC2 Power 는 사용할 수 없습니다(DC2 폐지)")
+        if p.get("use_rf_power"):                          # R(D432) — 운전 상한을 넘으면 거부(고쳐 쓰지 않음). v1 은 받아들이고 약 361 W 에서 막혔다
+            lim = rf_operating_max(cfg)
+            try:
+                rfw = float(p.get("rf_power", 0) or 0)
+            except (TypeError, ValueError):
+                rfw = 0.0
+            if rfw > lim:
+                errs.append(f"RF Target Power(W)는 운전 상한 {lim:g} W 이하여야 합니다 (현재 {rfw:g}, RF_OPERATING_MAX_W)")
     if p.get("use_heater"):
         avail = caps.heater if heater_available is None else heater_available
         if int(chamber) != 2:

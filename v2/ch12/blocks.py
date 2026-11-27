@@ -280,7 +280,7 @@ def _check_param(p: BParam, v: Any) -> Optional[str]:
 
 
 def _check_one(b: Any, path: str, chamber: int, caps: Caps, cfg: Mapping[str, Any], errs: list, warns: list) -> Optional[dict]:
-    from v2.ch12.recipe_check import check_dc_pulse, rfp_freq_max_khz, heater_limit_c
+    from v2.ch12.recipe_check import check_dc_pulse, rfp_freq_max_khz, heater_limit_c, rf_operating_max
     defs = by_type()
     if not isinstance(b, dict):
         errs.append(f"블록 {path}: 객체여야 함")
@@ -346,6 +346,8 @@ def _check_one(b: Any, path: str, chamber: int, caps: Caps, cfg: Mapping[str, An
                             ("rf_power", "rf", "RF 연속"), ("dcp_power", "dcp", "DC Pulse"), ("rfp_power", "rfp", "RF Pulse")):
             if _num(o[k]) and not getattr(caps, cap):
                 errs.append(f"{pre}: {k}: 이 챔버는 {lab} 미지원")
+        if _num(o["rf_power"]) and caps.rf and float(o["rf_power"]) > rf_operating_max(cfg):     # R(D432) — 운전 상한
+            errs.append(f"{pre}: rf_power: {o['rf_power']:g} > {rf_operating_max(cfg):g} W(운전 상한 RF_OPERATING_MAX_W)")
         if _num(o["dcp_power"]) and _num(o["rfp_power"]):
             errs.append(f"{pre}: RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)")
         if _num(o["rfp_freq_khz"]):

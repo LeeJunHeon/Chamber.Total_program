@@ -132,11 +132,35 @@ class RfPower:
     def c(self, k: str) -> float:
         return float(self.cfg[k])
 
+    def op_max_key(self) -> str:
+        """운전 상한 설정 이름(R) — Plasma Cleaning RF 는 PC_RF_OPERATING_MAX_W, CH2 RF 는 RF_OPERATING_MAX_W."""
+        return "PC_RF_OPERATING_MAX_W" if self.mode == "pc" else "RF_OPERATING_MAX_W"
+
+    def op_max(self) -> float:
+        """운전 상한 W(R — 사용자 결정 2026-11-27, D432): 이 값을 넘는 목표는 거부하고 보내는 W(램프·보정 포함)도 이 값까지.
+        전원 정격 RF_MAX_POWER 보다 크지 않게(설정 규칙 RF01 이 막지만 한 번 더). 키가 없으면 RF_MAX_POWER(옛 설정 파일)."""
+        rated = self.c("RF_MAX_POWER")
+        try:
+            v = float(self._g(self.op_max_key(), rated))
+        except (TypeError, ValueError):
+            v = rated
+        return max(0.0, min(rated, v))
+
+    def over_limit(self, w: float) -> Optional[str]:
+        """운전 상한을 넘는 W 면 거부 글(상한·설정 이름), 아니면 None — 고쳐 쓰지 않는다."""
+        lim = self.op_max()
+        if float(w) > lim + 1e-9:
+            return f"{float(w):g} W 가 운전 상한 {lim:g} W({self.op_max_key()})를 넘음"
+        return None
+
     def xform_write(self, w: float) -> float:
-        """역변환(device/rf_power.py:927-932): 0.01 W 이하는 진짜 0, 아니면 a·W + b 를 0~RF_MAX_POWER."""
+        """역변환(device/rf_power.py:927-932): 0.01 W 이하는 진짜 0, 아니면 a·W + b.
+        v1 은 이 값을 RF_MAX_POWER(600)로 잘라 CH2 RF 는 약 361 W, Plasma Cleaning 은 약 345 W 에서 막혔다(목표는 받아들이고 닿지 못함).
+        R(D432 — D136 의 이 항목만 바꿈): D/A 범위(PLC_DC_POWER_MAX_W)로만 자른다. 보내는 W 는 운전 상한 아래라 상한 기본값
+        (360·340 W)에서는 v1 과 같은 값이 나간다(시험 test_rf_limit.py — 0~상한 1 W 간격)."""
         if w <= 0.01:
             return 0.0
-        return max(0.0, min(self.c("RF_MAX_POWER"), self.p("inv_a") * float(w) + self.p("inv_b")))
+        return max(0.0, min(self.c("PLC_DC_POWER_MAX_W"), self.p("inv_a") * float(w) + self.p("inv_b")))
 
     # ───────── 이벤트 ─────────
     def _emit(self, kind: str, detail: str = "", reason: Optional[str] = None, **data) -> None:
@@ -190,8 +214,8 @@ class RfPower:
             self._emit("log", f"RF READ 실패: {err_text(res)}")
 
     def _send(self, power_w: float, after: Optional[Callable[[bool], None]] = None, guard=True) -> bool:
-        """검증 경로 전송(클램프·같은 값 억제). 실제로 보냈으면 True. after(ok) 는 결과 뒤."""
-        power_w = max(0.0, min(self.c("RF_MAX_POWER"), float(power_w)))
+        """검증 경로 전송(클램프 0~운전 상한·같은 값 억제). 실제로 보냈으면 True. after(ok) 는 결과 뒤."""
+        power_w = max(0.0, min(self.op_max(), float(power_w)))
         if self.last_sent is not None and abs(power_w - self.last_sent) < 1e-6:
             return False
         g = self._gen
@@ -209,7 +233,7 @@ class RfPower:
         return True
 
     def _send_unverified(self, power_w: float, after: Callable[[Result], None]) -> None:
-        power_w = max(0.0, min(self.c("RF_MAX_POWER"), float(power_w)))
+        power_w = max(0.0, min(self.op_max(), float(power_w)))
 
         def cb(res: Result) -> None:
             if res.status != Status.OK:
@@ -217,8 +241,13 @@ class RfPower:
             after(res)
         self._write_raw(self.xform_write(power_w), cb, kind="safety")
 
-    def retarget(self, target_power: float) -> float:
-        """공정 중 새 목표(PROCESS_ADJUST 지금 블록) — start() 와 같은 제한(0~RF_MAX_POWER)·반사파 감시 시작 조건·카운터 0. 적용한 목표를 돌려준다."""
+    def retarget(self, target_power: float) -> Optional[float]:
+        """공정 중 새 목표(PROCESS_ADJUST 지금 블록) — start() 와 같은 제한·반사파 감시 시작 조건·카운터 0. 적용한 목표를 돌려준다.
+        운전 상한을 넘으면 바꾸지 않고 None(R — 공정 중 값 바꾸기가 먼저 거부하지만 드라이버도 한 번 더)."""
+        bad = self.over_limit(target_power)
+        if bad:
+            self._status(f"RF 새 목표 거부: {bad}")
+            return None
         self.target_power = float(max(0.0, min(self.c("RF_MAX_POWER"), float(target_power))))
         self.low_power_n = 0
         self.blind_reach_ts = None
@@ -259,6 +288,11 @@ class RfPower:
         if self.running:
             self._status("경고: RF 파워가 이미 동작 중입니다.")
             done("STATE_NOT_ALLOWED")
+            return
+        bad = self.over_limit(target_power)
+        if bad:                                              # R — 고쳐 쓰지 않고 거부(레시피 검사·PC 시작이 먼저 거부한다)
+            self._status(f"RF 시작 거부: {bad}")
+            done("BAD_ARGS")
             return
         self.target_power = float(max(0.0, min(self.c("RF_MAX_POWER"), float(target_power))))
         self._held = None
@@ -480,11 +514,11 @@ class RfPower:
                 if self.current_step < self.target_power:
                     new = min(self.current_step + self.p("ramp_step"), self.target_power)
                 else:
-                    new = min(self.current_step + self.p("fine_up"), self.c("RF_MAX_POWER"))
+                    new = min(self.current_step + self.p("fine_up"), self.op_max())
             else:
                 new = max(0.0, self.current_step - self.p("ramp_down"))
                 self._status(f"목표 파워 초과. Ramp-Down 시도... (step→{new:.1f}W, FWD={self.forward_w:.1f}W)")
-            new = max(0.0, min(self.c("RF_MAX_POWER"), float(new)))
+            new = max(0.0, min(self.op_max(), float(new)))      # R — 보정으로 목표를 넘겨 올려도 운전 상한까지(v1 은 환산값 600 에서 막힘)
             sent = (last is None) or (abs(new - last) > 1e-6)
             self.current_step = float(new)
             fwd = self.forward_w
@@ -514,7 +548,7 @@ class RfPower:
                 return
             self.maintain_count = 0
             step = self.c("RF_MAINTAIN_STEP") * (1 if err > 0 else -1)
-            new = max(0.0, min(self.c("RF_MAX_POWER"), float(self.current_step) + step))
+            new = max(0.0, min(self.op_max(), float(self.current_step) + step))
             self.current_step = float(new)
             if last is None or abs(new - last) > 1e-6:
                 fwd, tgt = self.forward_w, self.target_power

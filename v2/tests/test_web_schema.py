@@ -14,7 +14,7 @@ from v2.ch12 import web_schema as W
 from v2.ch12.params import PARAMS, table
 from v2.ch12.sim.rig import Ch12Rig
 
-PINNED = (18, "183fb0bc286b9f8ad25005c686715530723e9f84538cb6296110c3dc195f5910")
+PINNED = (19, "d730f9e6f6e34534330698ebfbb8aceefa5e76e6d4191008c8f6dce36a462532")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands",
        "preconditions", "reasons", "plcButtons", "plcHazardText", "recipe", "blocks", "adjust", "stopSequence", "states", "events",
        "eventKinds", "eventSources", "paramGroups", "snapshot", "chambers"]
@@ -160,6 +160,6 @@ def test_config_saved_with_v15_schema_hash_keeps_values(tmp_path):
     assert {k: got[k] for k in vals} == vals                                   # 값은 하나도 바뀌지 않는다(키는 그대로라)
     assert any("파라미터 정의가 바뀜" in n and "새 키 기본값 []" in n and "없어진 키 버림 []" in n for n in st.notes), st.notes
     b = W.bundle_for(got, st, st.version)
-    assert b["paramSchemaHash"] == param_schema_hash() and b["version"] == 18
+    assert b["paramSchemaHash"] == param_schema_hash() and b["version"] == 19
     cur = {p["key"]: p["current"] for p in b["params"]}
     assert cur["CH2_MFC_FLOW_STABLE_COUNT"] == 5 and cur["TURBO_OFF_ALERT_S"] == 600.0 and cur["LOCAL_HMI_PORT"] == 8799

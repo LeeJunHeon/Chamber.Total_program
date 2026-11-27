@@ -355,6 +355,9 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             return self._reject("실행 오류", f"CH{ch} Plasma Cleaning이 이미 실행 중입니다.", "E205")
         if self.run_state.is_running("chamber", ch) or self._chamber_busy(ch):
             return self._reject("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.", "E205")
+        over = None if test_mode else self._rf_over_limit()
+        if over:
+            return self._reject("입력값 확인", over[0], "E230", over[1])
         # 수락 — 결과 플래그 초기화는 여기서만(TEST-112)
         self.cleanup_started = False
         self.power_only = False
@@ -373,6 +376,20 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         body = (lambda: self._run_test(ch, test_dur)) if test_mode else (lambda: self._run_real(ch))
         self._thread = self.clock.start_thread(lambda: self._thread_main(body, ch), f"pc-run-ch{ch}")
         return StartResult(True, "TEST MODE" if test_mode else "", None)
+
+    def _rf_over_limit(self) -> Optional[tuple]:
+        """R(사용자 결정 2026-11-27, D432) — RF Power 가 Plasma Cleaning RF 운전 상한(PC_RF_OPERATING_MAX_W)을 넘으면 시작 거부
+        (고쳐 쓰지 않음 — v1 은 받아들이고 약 345 W 에서 막혔다). (팝업 글, 상세 글 — 설정 이름은 상세에만) 또는 None."""
+        from v2.ch12.recipe_check import pc_rf_operating_max
+        try:
+            w = float(R.read_params(self.ui, self.cfg).rf_power_w)
+        except Exception:
+            return None                                      # 값 읽기 오류는 지금처럼 시작 뒤 단계가 다룬다
+        lim = pc_rf_operating_max(self.cfg)
+        if w <= lim + 1e-9:
+            return None
+        msg = f"RF Power {w:g} W 는 운전 상한 {lim:g} W 를 넘습니다."
+        return msg, f"{msg} (PC_RF_OPERATING_MAX_W)"
 
     def _thread_main(self, body, ch: int) -> None:
         """실행 스레드 — 예상 못 한 예외로 '실행 중'이 남지 않게(v1 은 asyncio 태스크 예외가 조용히 사라졌다)."""

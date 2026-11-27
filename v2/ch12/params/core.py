@@ -329,6 +329,11 @@ PARAMS: tuple = (
     p("PC_DEFAULT_RF_POWER_W", "pc", "클리닝 기본 RF 출력", "W", F, 100.0, 0.0, 600.0, safety=H,
        src="lib/config_common.py:793 · main.py:1101",
        desc="클리닝 기본 RF 출력 (W)"),
+    p("PC_RF_OPERATING_MAX_W", "pc", "Plasma Cleaning RF 운전 상한", "W", F, 340.0, 1.0, 1000.0, safety=H,
+       desc="Plasma Cleaning RF Power 로 넣을 수 있는 최대값입니다. 넘으면 시작을 거부하고, 보내는 값도 이 값을 넘지 않습니다. "
+            "RF 최대 출력보다 클 수 없습니다",
+       note="R(사용자 결정 2026-11-27, D432) — 이름은 챔버K RF_OPERATING_MAX_W 와 같은 꼴. 기본 340 W 는 v1 에서 실제로 나가던 최대"
+            "(약 345 W)보다 낮아 장비 출력이 달라지지 않는다"),
     p("PC_DEFAULT_PROCESS_TIME_MIN", "pc", "클리닝 기본 공정 시간", "min", F, 1.0, 0.0, 1440.0,
        src="lib/config_common.py:794 · main.py:1105",
        desc="클리닝 기본 공정 시간 (분)"),

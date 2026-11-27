@@ -148,7 +148,8 @@ class AdjustMixin:
 
     # 장비 최대 — 공정 시작(start)이 목표를 자르던 한도(v1 설정)와 같은 것. 파워는 이 값을 넘으면 거부한다(고쳐 쓰지 않음).
     # RF Pulse 는 v1 에 펄스 전용 최대가 없어 RF 계열 최대(RF_MAX_POWER)를 쓴다(결정 D402 — 사용자 확인 필요).
-    _MAX_KEYS = {"dc.power": "DC_MAX_POWER", "dc2.power": "DC_MAX_POWER", "rf.power": "RF_MAX_POWER",
+    # CH2 RF 연속은 운전 상한 RF_OPERATING_MAX_W(R — 사용자 결정 2026-11-27, D432. 예전 RF_MAX_POWER 600 은 실제로 약 361 W 에서 막혔다)
+    _MAX_KEYS = {"dc.power": "DC_MAX_POWER", "dc2.power": "DC_MAX_POWER", "rf.power": "RF_OPERATING_MAX_W",
                  "dcp.power": "DCP_MAX_POWER_W", "rfp.power": "RF_MAX_POWER"}
 
     def adjust_max_key(self, ai) -> str:
@@ -159,6 +160,9 @@ class AdjustMixin:
         if ai.key == "heater.target":
             from v2.ch12.recipe_check import heater_limit_c
             return float(heater_limit_c(self.cfg))
+        if ai.key == "rf.power":                             # R — 운전 상한(전원 정격보다 크지 않게, 드라이버와 같은 값)
+            from v2.ch12.recipe_check import rf_operating_max
+            return float(rf_operating_max(self.cfg))
         k = self._MAX_KEYS.get(ai.key)
         if k is None:
             return None
@@ -192,8 +196,7 @@ class AdjustMixin:
             d = a.dc.get(1 if key == "dc.power" else 2) if key != "rf.power" else a.rf
             if d is None or not getattr(d, "running", False):
                 return False
-            d.retarget(float(v))                           # start() 와 같은 제한·카운터·과전류 한계(제한된 목표 기준)
-            return True
+            return d.retarget(float(v)) is not None        # start() 와 같은 제한·카운터·과전류 한계(제한된 목표 기준). RF 는 운전 상한을 넘으면 None(R)
         if key in ("dcp.power", "rfp.power"):
             d = a.dcp if key == "dcp.power" else a.rfp
             if d is None or d.worker is None:

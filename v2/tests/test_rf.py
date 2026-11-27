@@ -67,7 +67,8 @@ def test_write_transform_and_dac():
     r = PlcRig(rf=True)
     x = r.rf.xform_write
     assert x(0.0) == 0.0 and x(0.01) == 0.0 and x(1.0) == pytest.approx(4.2869)
-    assert x(600.0) == 600.0                                       # 0~RF_MAX_POWER 클램프
+    # R(D432): 환산값은 D/A 범위(PLC_DC_POWER_MAX_W 1000)로만 자른다 — v1 은 RF_MAX_POWER(600)에서 잘라 약 361 W 에서 막혔다
+    assert x(600.0) == pytest.approx(1.6546 * 600.0 + 2.6323) and x(1000.0) == 1000.0
     assert dac_code(r.cfg, x(1.0)) == 17 and dac_code(r.cfg, x(2.0)) == 24 and dac_code(r.cfg, x(100.0)) == 672
     r.done()
 

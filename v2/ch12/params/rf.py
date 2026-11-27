@@ -7,12 +7,19 @@ device/rf_power.py:67-68). 그래서 ch2.RF_REFLECTED_THRESHOLD_W 는 읽히지 
 """
 from __future__ import annotations
 
-from ._base import B, F, H, I, L, M, Dropped, p
+from ._base import B, F, H, I, L, M, Dropped, need, p, rule
 
 _G = "rf"
 
 PARAMS: tuple = (
-    p("RF_MAX_POWER", _G, "RF 최대 출력", "W", F, 600.0, 0.0, 1000.0, safety=H, src="lib/config_common.py:173 · device/rf_power.py:88"),
+    p("RF_MAX_POWER", _G, "RF 최대 출력", "W", F, 600.0, 0.0, 1000.0, safety=H, src="lib/config_common.py:173 · device/rf_power.py:88",
+      desc="RF 전원 정격입니다. RF 운전 상한(CH2·Plasma Cleaning)의 위 한도, RF Pulse 공정 중 값 바꾸기 상한, 정지 때 내리는 시간 계산에 씁니다",
+      note="R(사용자 결정 2026-11-27, D432): v1 은 W→D/A 환산값 a·W+b 를 이 값으로 잘라 CH2 RF 는 약 361 W, Plasma Cleaning 은 약 345 W 에서 "
+           "막혔다. v2 는 환산값을 D/A 범위(PLC_DC_POWER_MAX_W)로만 자르고 넣을 수 있는 W 는 RF_OPERATING_MAX_W·PC_RF_OPERATING_MAX_W 로 정한다"),
+    p("RF_OPERATING_MAX_W", _G, "RF 운전 상한", "W", F, 360.0, 1.0, 1000.0, safety=H,
+      desc="CH2 RF Power 로 넣을 수 있는 최대값입니다. 레시피 RF Power, 파워 켜기 단계, 공정 중 값 바꾸기를 이 값으로 검사하고 넘으면 "
+           "거부합니다. 보내는 값도 이 값을 넘지 않습니다. RF 최대 출력보다 클 수 없습니다",
+      note="R(D432) — 이름은 챔버K 와 같다. 기본 360 W 는 v1 에서 실제로 나가던 최대(약 361 W)보다 낮아 장비 출력이 달라지지 않는다"),
     p("RF_RAMP_STEP", _G, "RF 램프 단계", "W", F, 1.0, 0.1, 100.0, safety=H,
       src="lib/config_common.py:174 · device/rf_power.py:89", desc="램프업 측정마다(1 s) +이 값, 정지 램프다운 1 s 마다 −이 값"),
     p("RF_MAINTAIN_STEP", _G, "RF 유지 보정 단계", "W", F, 0.1, 0.0, 10.0, src="lib/config_common.py:175"),
@@ -55,6 +62,13 @@ PARAMS: tuple = (
       note="v1 은 채널 모듈(config_ch2 — json 적용 전 .py 기본값 False 복사)을 읽어 common 값이 효과 없었다(⚠) — 기본 False 로 같게"),
     p("CHAMBER_RF_CONT_WRITE_INV_A", _G, "RF 연속 쓰기 역변환 기울기", "", F, 1.6546, 0.01, 100.0, safety=H, src="lib/config_common.py:735"),
     p("CHAMBER_RF_CONT_WRITE_INV_B", _G, "RF 연속 쓰기 역변환 오프셋", "W", F, 2.6323, -1000.0, 1000.0, safety=H, src="lib/config_common.py:736"),
+)
+
+CROSS_RULES: tuple = (
+    rule("RF01", ("RF_OPERATING_MAX_W", "PC_RF_OPERATING_MAX_W", "RF_MAX_POWER"),
+         "RF 운전 상한(CH2·Plasma Cleaning) ≤ RF 최대 출력(전원 정격) — R(D432)",
+         lambda v: need(v["RF_OPERATING_MAX_W"] <= v["RF_MAX_POWER"] and v["PC_RF_OPERATING_MAX_W"] <= v["RF_MAX_POWER"],
+                        "RF 운전 상한이 RF_MAX_POWER 보다 크다")),
 )
 
 _UNUSED = "v1 코드에서 읽는 곳 없음(설정 로더의 이름·형식 검사만)"
