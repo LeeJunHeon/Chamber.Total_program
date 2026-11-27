@@ -169,7 +169,7 @@ def _handler(web: FakeWeb):
             code, out = web.ingest(body)
             web.posts.append({"t": time.monotonic(), "code": code, "n": len(body.get("messages") or []),
                               "types": [e["type"] for e in body.get("messages") or []], "bytes": len(raw),
-                              "instance": body.get("instance")})
+                              "instance": body.get("instance"), "bye": bool(body.get("bye"))})
             self._json(code, out)
 
         def do_GET(self):

@@ -116,6 +116,8 @@ class Uplink:
         self._cmd_lock = threading.Lock()
         self.done_cmds: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
         self.dup_cmds = 0
+        self._post_lock = threading.Lock()                 # ingest POST 하나씩 — 끝 표시(bye)가 보내던 POST 뒤에 가게(B — 챔버K W-25 C1)
+        self.bye_sent = False
         # 소비자
         self.last_seq: Optional[int] = None
         self.resubscribes = 0
@@ -239,8 +241,29 @@ class Uplink:
     def _headers(self, **extra) -> dict:
         return dict({"Authorization": self._auth, "User-Agent": "ch12-v2"}, **extra)
 
-    def post_ingest(self, body: bytes) -> dict:
-        c = self._conn(float(self.cfg["UPLINK_TIMEOUT_SEC"]))
+    def bye(self, timeout: float = 2.0) -> bool:
+        """정상 종료 끝 표시(B — 챔버K W-25 C1 uplink.bye 와 같게) — 메시지 없는 POST 에 "bye": true. 웹이 이 실행의 주인 자리를
+        바로 비워 다시 켠 실행이 '같은 장비 ID 의 다른 실행이 연결 중'(409)으로 20 s 쯤 기다리지 않는다. 보내던 POST 가 끝난 뒤
+        한 번만, 그 뒤로는 보내지 않는다. 실패해도 그만(웹은 지금처럼 조용한 시간을 기다림) — timeout 안에서만."""
+        self._stop.set()
+        self._wake.set()
+        if not self._post_lock.acquire(timeout=max(0.0, timeout)):
+            return False
+        try:
+            if self.bye_sent:
+                return False
+            self.bye_sent = True
+            body = (b'{"equipment":' + _dumps(self.cfg["EQUIPMENT_ID"]) + b',"instance":' + _dumps(self.hub.instance)
+                    + b',"schemaHash":' + _dumps(self.hub.hello_data()["schemaHash"]) + b',"messages":[],"bye":true}')
+            self.post_ingest(body, timeout=min(float(self.cfg["UPLINK_TIMEOUT_SEC"]), timeout))
+            return True
+        except Exception:
+            return False
+        finally:
+            self._post_lock.release()
+
+    def post_ingest(self, body: bytes, timeout: Optional[float] = None) -> dict:
+        c = self._conn(float(self.cfg["UPLINK_TIMEOUT_SEC"]) if timeout is None else timeout)
         try:
             c.request("POST", self.base + "/ingest", body=body,
                       headers=self._headers(**{"Content-Type": "application/json"}))
@@ -311,7 +334,10 @@ class Uplink:
                 + b',"schemaHash":' + _dumps(self.hub.hello_data()["schemaHash"]) + b',"messages":['
                 + b",".join(msgs) + b"]}")
         try:
-            out = self.post_ingest(body)
+            with self._post_lock:
+                if self.bye_sent:                                # 끝 표시를 보낸 뒤에는 다시 보내지 않는다(주인 자리를 다시 잡지 않게)
+                    return False
+                out = self.post_ingest(body)
         except HttpError as e:
             self._last_post_end = time.monotonic()
             if e.status == 413:

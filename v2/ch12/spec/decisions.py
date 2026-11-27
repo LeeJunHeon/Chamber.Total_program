@@ -1004,4 +1004,13 @@ DECISIONS += [
          reason="사용자 결정 2026-11-27(W)", confirm=False,
          where="v2/ch12/keep_awake.py(PowerInfo·power_warning·check_power·windows_power); v2/ch12/app.py(start_keep_awake·power_reader); "
                "v2/ch12/commands.py(POWER_SETTINGS); v2/ch12/web_schema.py(eventKinds); v2/tests/test_power_settings.py"),
+    dict(id="D436", title="2026-11-27 정상 종료 끝 표시 — 메시지 없는 POST 에 \"bye\": true(B, 챔버K W-25 C1 과 같게)",
+         decision="정상 종료(Ctrl+C·SIGTERM — _teardown, 웹 연결을 멈춘 뒤)와 창 닫기(winshell on_console — 의도적 종료 뒤 남은 시간 "
+                  "CONSOLE_EXIT_BUDGET_S 5 s 안에서 0.3 s 넘게 남았을 때만, 최대 1 s) 때 uplink.bye(): 메시지 없는 ingest POST 에 \"bye\": true. "
+                  "웹이 이 실행의 주인 자리를 바로 비워 바로 다시 켠 실행이 409(같은 장비 ID 의 다른 실행이 연결 중)로 20 s 쯤 기다리지 않는다. "
+                  "ingest POST 는 잠금 하나로 하나씩 — 끝 표시는 보내던 POST 가 끝난 뒤에 가고(잠금을 timeout 안에 못 얻으면 보내지 않음), 보낸 뒤에는 "
+                  "send_once 가 POST 하지 않는다. 실패해도 종료를 늦추지 않는다(timeout = min(UPLINK_TIMEOUT_SEC, 2 s)). 웹 연결을 쓰지 않으면 보내지 않는다.",
+         reason="사용자 지시 2026-11-27(B)", confirm=False,
+         where="v2/ch12/uplink.py(bye·_post_lock·send_once); v2/ch12/app.py(_teardown·on_console·CONSOLE_EXIT_BUDGET_S); "
+               "v2/tests/test_uplink_bye.py·fake_web.py"),
 ]

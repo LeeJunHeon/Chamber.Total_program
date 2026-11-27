@@ -64,6 +64,7 @@ LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
 REFUSE_BUSY = "공정 중 — 노트북 화면·웹에서 STOP 먼저"
+CONSOLE_EXIT_BUDGET_S = 5.0     # 창 닫기는 약 5초 안에 끝나야 한다 — 의도적 종료(safety.FORCE_DEADLINE_S 4 s) + 끝 표시 여유(B, 챔버K 와 같게)
 CLOSE_LINE = "정상 종료. 이 창을 닫아도 됩니다"        # 끝 줄(종료 코드 0) — sim cmd 는 새 cmd /k 창이라 창이 남는다(D430)
 RUNNING_LINE = "실행 중 — 멈추려면 Ctrl+C"
 SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
@@ -502,11 +503,16 @@ class App:
         self.shutdown = shutdown
 
         def on_console(why: str) -> None:
+            t0 = time.monotonic()
             exit_now(why)
             s = self.system
             try:
                 if s is not None and s.recorder is not None:
                     s.recorder.flush(0.5)
+                if self.uplink is not None:                # 창 닫기도 끝 표시(B) — 남은 시간 안에서만(윈도우가 곧 끝낸다)
+                    left = CONSOLE_EXIT_BUDGET_S - (time.monotonic() - t0)
+                    if left > 0.3:
+                        self.uplink.bye(timeout=min(1.0, left))
                 for h in self._log_handlers:
                     h.flush()
             finally:
@@ -602,6 +608,7 @@ class App:
             self.hub.close()                               # 소비자(로컬 화면 SSE·웹 연결) 끝
         if self.uplink is not None:
             self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
+            self.uplink.bye()                              # 끝 표시(B — 챔버K W-25 C1) — 웹이 주인 자리를 바로 비운다(다시 켜면 바로 받음)
         if self.server is not None:
             self.server.stop()
         if self.instance_sock is not None:
