@@ -61,7 +61,7 @@ def test_init_ch2_heater_rules(monkeypatch):
     import v2.ch12.heater_setup as HS
     monkeypatch.setattr(HS, "load_heater_cfg", lambda cfg, p: (_ for _ in ()).throw(ValueError("bad")))
     assert init_ch2_heater({"CH2_SUPPORTS_HEATER": True}, _Eng, log) is None
-    assert logs[-1] == ("HEATER", "히터 설정 읽기 실패 — 히터 기능 끔: ValueError('bad')")
+    assert logs[-1] == ("HEATER", "히터 설정 읽기 실패 — 히터 기능 사용하지 않음: ValueError('bad')")
 
 
 # ───────────────────────── HEAT-085 · DC2 · SUPPORTS_* ─────────────────────────

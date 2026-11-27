@@ -35,7 +35,7 @@ PARAMS: tuple = (
       desc="명령을 쓴 뒤 되읽기 질의까지(그리고 다시 쓰기 사이)"),
     p("RFPULSE_Q_MODE", _G, "조절 모드 확인 질의 번호", "", I, 154, 0, 255, safety=H, src="v2(2026-11-09 E2 → 2026-11-13 D407)",
       desc="SET_MODE(3) 뒤 되읽을 AE Bus 보고 명령 번호. 기본 154 = CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode — 1 byte: 6 Forward, 7 Load, "
-           "8 External(DC Bias), Set with command 3'(CH1 dressler CESAR·CH2 AE CESAR 공통). 0 = 읽지 않음(끔). 155 는 제어 모드(HOST) 질의라 쓸 수 없다"),
+           "8 External(DC Bias), Set with command 3'(CH1 dressler CESAR·CH2 AE CESAR 공통). 0 = 읽지 않음. 155 는 제어 모드(HOST) 질의라 쓸 수 없다"),
     p("ACK_TIMEOUT_MS", _G, "설정 명령 응답 한도", "ms", I, 2000, 100, 60000, src=f"{_CC}:81", desc="RF ON/OFF 는 max(이 값, 2500)"),
     p("QUERY_TIMEOUT_MS", _G, "질의 응답 한도", "ms", I, 4500, 100, 60000, src=f"{_CC}:82"),
     p("POLL_QUERY_TIMEOUT_MS", _G, "폴링 질의 응답 한도", "ms", I, 9000, 100, 60000, src=f"{_CC}:432",
@@ -47,7 +47,7 @@ PARAMS: tuple = (
     p("RFPULSE_RECONNECT_BACKOFF_START_MS", _G, "재연결 시작 간격", "ms", I, 2000, 200, 600000, safety=L, src=f"{_CC}:427"),
     p("RFPULSE_RECONNECT_BACKOFF_MAX_MS", _G, "재연결 최대 간격", "ms", I, 30000, 200, 600000, safety=L, src=f"{_CC}:428"),
     p("RFPULSE_PULSE_MODE", _G, "펄싱 모드(명령 27)", "", I, 1, 0, 5, safety=H, src=f"{_CC}:435",
-      desc="0 끔·1 내부·2 외부·3 외부 반전·4 게이트 내부·5 게이트 내부 반전"),
+      desc="0 꺼짐·1 내부·2 외부·3 외부 반전·4 게이트 내부·5 게이트 내부 반전"),
     p("RFPULSE_FORP_TOLERANCE_PERCENT", _G, "Forward 허용 오차", "%", F, 5.0, 0.0, 100.0, safety=H, src=f"{_CC}:437"),
     p("RFPULSE_FORP_CONSECUTIVE_LIMIT", _G, "Forward 이탈 연속 횟수", "회", I, 3, 1, 100, safety=H, src=f"{_CC}:438"),
     p("RFPULSE_REFP_LIMIT_WATTS", _G, "Reflected 상한", "W", F, 20.0, 0.0, 1000.0, safety=H, src=f"{_CC}:439"),
@@ -55,7 +55,7 @@ PARAMS: tuple = (
     p("RFPULSE_REFP_HYST_W", _G, "Reflected 판정 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, src="v2(W-21·22 대조 A — 챔버K 실장비 시험 2026-11-25)",
       desc="Reflected 초과 연속 횟수는 'REFP < 상한 − 이 값' 일 때만 0 으로 돌아가고 그 사이면 그대로 둔다. Reflected 경고 풀림도 같은 여유 폭. "
            "0 = v1 그대로(상한 아래면 곧바로 0)"),
-    p("RFPULSE_REFP_WARN_WATTS", _G, "Reflected 경고(문구만, CH1)", "W", F, 0.0, 0.0, 1000.0, src=f"{_CC}:441", desc="0 = 끔"),
+    p("RFPULSE_REFP_WARN_WATTS", _G, "Reflected 경고(문구만, CH1)", "W", F, 0.0, 0.0, 1000.0, src=f"{_CC}:441", desc="0 = 사용하지 않음"),
     p("CH2_RFPULSE_REFP_WARN_WATTS", _G, "CH2 Reflected 경고(문구만)", "W", F, 5.0, 0.0, 1000.0, src="config/settings.json:641"),
     p("RFPULSE_FREQ_MAX_HZ", _G, "펄스 주파수 상한(레시피 검사)", "Hz", I, 30000, 1, 100000, safety=H, src=f"{_CC}:379",
       desc="사양 3-5 1 Hz~30 kHz(넘으면 W40 출력 차단) — 공정 엔진이 시작 전에 검사(runtime/chamber_runtime.py:3185)"),

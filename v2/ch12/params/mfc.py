@@ -158,7 +158,7 @@ DROPPED: tuple = (
     Dropped("common.MFC_SCALE_FACTORS.3", "채널 파일이 덮음", f"{_S}:170"),
     Dropped("ch1.MFC_SCALE_FACTORS", "묶음 — 하위 키 CH1_MFC_SCALE_FACTORS_1~3 으로", f"{_S}:504", replaced_by="CH1_MFC_SCALE_FACTORS_1"),
     Dropped("ch2.MFC_SCALE_FACTORS", "묶음 — 하위 키 CH2_MFC_SCALE_FACTORS_1~3 으로", f"{_S}:579", replaced_by="CH2_MFC_SCALE_FACTORS_1"),
-    Dropped("common.MFC_INACTIVITY_REOPEN_S", "v1 값 0(끔) — 1초 읽기가 늘 통신해 60 s 무통신이 없다", f"{_S}:32;{_C}:61;device/mfc.py:2325-2341"),
+    Dropped("common.MFC_INACTIVITY_REOPEN_S", "v1 값 0(사용하지 않음) — 1초 읽기가 늘 통신해 60 s 무통신이 없다", f"{_S}:32;{_C}:61;device/mfc.py:2325-2341"),
     Dropped("common.MFC_TCP_KEEPALIVE", "v2 TcpTransport 가 SO_KEEPALIVE 를 늘 켠다(v1 False → 0) — 사용자 확인 필요 후보",
             f"{_S}:41;{_C}:68;device/mfc.py:1276-1283"),
     Dropped("common.MFC_WATCHDOG_INTERVAL_MS", "v2 worker 가 끊김 즉시 백오프 재연결(감시 주기 없음)", f"{_S}:161;{_C}:273;device/mfc.py:1253"),

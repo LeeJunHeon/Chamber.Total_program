@@ -47,7 +47,7 @@ PARAMS: tuple = (
     p("RF_BLIND_SETTLE_EARLY_EXIT_REF_W", _G, "안정화 조기 종료 REF", "W", F, 1.0, 0.0, 600.0, src="lib/config_common.py:189"),
     p("RF_BLIND_RAMP_REACH_TIMEOUT_S", _G, "Blind ramp 도달 시간 한도", "s", F, 150.0, 0.0, 3600.0, safety=H,
       v1_default=60.0, src="config/settings.json:106 · device/rf_power.py:205",
-      desc="REF 감시 전 이 시간이 넘도록 FWD 가 임계에 못 닿으면 실패(시작 뒤 FWD 0.0 이 계속돼도 같은 시간). 0=끔"),
+      desc="REF 감시 전 이 시간이 넘도록 FWD 가 임계에 못 닿으면 실패(시작 뒤 FWD 0.0 이 계속돼도 같은 시간). 0=사용하지 않음"),
     p("PLC_RF_CH1_FWD_A", _G, "RF CH1(Plasma Cleaning) Forward 기울기", "", F, 0.1503488383, -100.0, 100.0, safety=H, src="lib/config_common.py:703"),
     p("PLC_RF_CH1_FWD_B", _G, "RF CH1(Plasma Cleaning) Forward 오프셋", "W", F, 3.0664228165, -1000.0, 1000.0, safety=H, src="lib/config_common.py:704"),
     p("PLC_RF_CH1_REF_A", _G, "RF CH1(Plasma Cleaning) Reflected 기울기", "", F, 0.1565388751, -100.0, 100.0, safety=H, src="lib/config_common.py:705"),

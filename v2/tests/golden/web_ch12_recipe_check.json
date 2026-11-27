@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "eef4864a577e15b938c92969df681489997d336cf4a30fd117d9c01b5a9bf6de",
+ "defsHash": "95b810330ba69e5e0156bdee42f4d0deae504d9ccb082772343f49636a4348c9",
  "defs": {
   "version": 1,
   "blocks": {
@@ -852,7 +852,7 @@
      "needs": "",
      "skippable": true,
      "skipCleanup": [
-      "메인 타이머 끝냄 → 다음 블록(끝 정지가 셔터·파워를 끔)",
+      "메인 타이머 끝냄 → 다음 블록(끝 정지에서 셔터·파워를 끕니다)",
       "OES 측정 정지"
      ],
      "pausable": true,
@@ -1854,7 +1854,7 @@
     "chuck_position": {
      "desc": "공정 전 Chuck 위치 up/mid/down",
      "unit": "",
-     "blank": "이동 안 함",
+     "blank": "이동하지 않음",
      "key": "chuck_position"
     },
     "main_shutter": {

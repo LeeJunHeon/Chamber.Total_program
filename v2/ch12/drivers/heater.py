@@ -275,7 +275,7 @@ class HeaterDriver:
         if not self.writes_allowed:
             raise RuntimeError("BENCH_READ_ONLY — 히터 쓰기 거부")
         if s is None:
-            raise RuntimeError("PLC 링크 없음 — 쓰기 못 함")
+            raise RuntimeError("PLC 링크 없음 — 쓸 수 없음")
 
     def w_reg(self, s, addr: int, value: int) -> None:
         if int(addr) not in WRITE_REGS:

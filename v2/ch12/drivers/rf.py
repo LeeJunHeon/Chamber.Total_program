@@ -170,7 +170,7 @@ class RfPower:
         self._emit("status", msg)
 
     def _ref_wait_event(self, phase: str, why: str = "") -> None:
-        """반사파 대기 웹 사건(W-21·22 A) — 대기 시작 1번·끝 1번(풀림·시간 초과·RF 끔). 공정 txt 의 v1 문구(status)와 따로."""
+        """반사파 대기 웹 사건(W-21·22 A) — 대기 시작 1번·끝 1번(풀림·시간 초과·RF 끄기). 공정 txt 의 v1 문구(status)와 따로."""
         if not self.on_event:
             return
         th, wait_to = self.c("RF_REFLECTED_THRESHOLD_W"), self.c("RF_REFLECTED_WAIT_TIMEOUT_S")
@@ -565,7 +565,7 @@ class RfPower:
         if self.ramping_down and not self.running:
             return
         self._status("정지 신호 수신됨.")
-        self._ref_wait_end("RF 끔")                 # 대기 중에 멈추면 끝 사건 한 번(W-21·22 A)
+        self._ref_wait_end("RF 끄기")                 # 대기 중에 멈추면 끝 사건 한 번(W-21·22 A)
         self._held = None
         self.running = False
         self._gen += 1

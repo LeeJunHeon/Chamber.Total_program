@@ -285,7 +285,7 @@ def load_heater_cfg(cfg: Mapping[str, Any], prefix: str = "CH2_") -> Tuple[Heate
 
     mreg = int(_get("HEATER_SESSION_MARK_REG", d.session_mark_reg, float))
     if mreg != 0 and not (REG_HEATER_HIGH < mreg <= REG_BLOCK_LAST):
-        _bad("HEATER_SESSION_MARK_REG", f"D{mreg} 이(가) 0(끔) 또는 블록 읽기 범위 D150~D160 밖(히터 영역 D110~D149 와 겹치면 안 됨)")
+        _bad("HEATER_SESSION_MARK_REG", f"D{mreg} 이(가) 0(사용하지 않음) 또는 블록 읽기 범위 D150~D160 밖(히터 영역 D110~D149 와 겹치면 안 됨)")
 
     out = HeaterCfg(
         enabled=bool(enabled), temp_scale=float(scale),

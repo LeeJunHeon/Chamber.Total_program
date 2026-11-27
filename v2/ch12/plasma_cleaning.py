@@ -858,7 +858,7 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         self.power_only = True
         self.abort_reason = str(reason)
         self.forced_fail, self.forced_fail_reason = True, str(reason)
-        self.log("MAIN", f"[EXIT] {reason} — 파워 출력만 끔(가스·밸브·MFC 그대로)")
+        self.log("MAIN", f"[EXIT] {reason} — 파워 출력만 끄기(가스·밸브·MFC 그대로)")
         if self.pc.is_running:
             self.pc.request_stop(str(reason))
         else:

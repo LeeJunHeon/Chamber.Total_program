@@ -59,7 +59,7 @@ PARAMS: tuple = (
          desc="1초 스냅샷 SQLite(WAL)·일별 CSV·이벤트·저널. v1 기록 뿌리(LOG_ROOT_DIR) 밖에 둔다 — log_sync 가 LOG_ROOT_DIR 를 "
               "통째로 NAS 로 복사하므로 쓰는 중인 SQLite 를 복사하지 않게"),
     inst("NAS_COPY_DIR", "install", "1초 기록 NAS 사본 폴더", S, "", pattern=ANY, safety=L, pending=True,
-         desc="빈 값이면 NAS 복사 안 함(설정이 있을 때만 — 지시 3장 (2)). 제어 흐름과 분리된 스레드가 복사",
+         desc="빈 값이면 NAS 복사하지 않음(설정이 있을 때만 — 지시 3장 (2)). 제어 흐름과 분리된 스레드가 복사",
          note="사용자 확인 필요: 설치 때 NAS 경로를 정한다(기본 빈 값)"),
 
     # ───────────── 비밀값(secret) — local_override.json 에만, 웹에 보내지 않음, 값은 커밋 금지 ─────────────
@@ -445,9 +445,9 @@ PARAMS: tuple = (
     p("CHAT_PLC_LINK_CODES", "chat", "억제 대상 오류 코드 목록", "", S, '["E401", "E402"]', safety=L, pattern=JSON_LIST,
        apply=LIVE, src="lib/config_common.py:634 · controller/chat_notifier.py:780",
        desc="억제 대상 코드 (공정 계열 E3xx 는 막지 않음)"),
-    p("CHAT_ERR_DEDUP_S", "chat", "같은 오류 카드 재전송 억제 창(0=억제 안 함)", "s", F, 60.0, 0.0, 86400.0, safety=L, apply=LIVE,
+    p("CHAT_ERR_DEDUP_S", "chat", "같은 오류 카드 재전송 억제 창(0=억제하지 않음)", "s", F, 60.0, 0.0, 86400.0, safety=L, apply=LIVE,
        src="lib/config_common.py:635 · controller/chat_notifier.py:793",
-       desc="같은 오류 카드 재전송 억제 창 (초, 0=억제 안 함)"),
+       desc="같은 오류 카드 재전송 억제 창 (초, 0=억제하지 않음)"),
     p("CHAT_POST_CONCURRENCY", "chat", "챗 동시 전송 상한", "", I, 4, 1, 64, safety=L,
        src="lib/config_common.py:648 · controller/chat_notifier.py:155",
        desc="동시 POST 상한"),

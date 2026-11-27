@@ -102,6 +102,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      챔버K 와 같은 이름·글)(D435).
   20 2026-11-27 챔버K W-25 와 맞추기(BUCZ) — U: eventKinds selfwatch/power_settings_unread(상세 — 전원 설정을 읽지 못함, 챔버K 와 같은
      이름·글, 시작 줄 없음)(D437).
+     C: 화면 글의 '끔·켬·안 함·못 함'을 바꿈 — 설정 설명·메모(0 = 사용하지 않음 등)·이름 CHAT_ERR_DEDUP_S, 키 사이 규칙 CH06·CH07, 명령
+     PLC_BUTTON·BUZZ_STOP 설명, 블록 main skip 정리 글, 레시피 열 chuck_position 빈 값, 안전 규칙 S4·S18·S37·S39 글, 뺀 설정 사유(D438).
 """
 from __future__ import annotations
 

@@ -1020,4 +1020,14 @@ DECISIONS += [
          reason="사용자 지시 2026-11-27(U)", confirm=False,
          where="v2/ch12/keep_awake.py(check_power on_unread); v2/ch12/app.py(start_keep_awake); v2/ch12/web_schema.py(eventKinds·묶음 20); "
                "v2/tests/test_power_settings.py·test_web_schema.py(PINNED)"),
+    dict(id="D438", title="2026-11-27 콘솔·화면 글에 '끔·켬·안 함·못 함'을 쓰지 않는다(C, 챔버K W-25 와 같은 말)",
+         decision="콘솔 '웹 연결 끔(sim)' → '웹 연결 사용하지 않음(sim)', '주소 없음 — 연결 안 함' → '연결하지 않음'. 의도적 종료·남은 파워 "
+                  "'파워(출력)만 끔' → '끄기'. 묶음 글(설정 설명·메모·이름, 키 사이 규칙, 명령 설명, 블록 글, 레시피 열 설명, 안전 규칙 글, 뺀 설정 "
+                  "사유)의 '0 = 끔' → '0 = 사용하지 않음', '안 함' → '하지 않음' 등. 사건 글(RF 반사파 대기 끝 'RF 끄기', 두께 설정 경고, 히터 설정 "
+                  "읽기 실패, PLC 링크 없음 '쓸 수 없음', PC 0W '확인되지 않음'). 그대로: 주석·독스트링, 공정 txt·v1 대조 시험이 묶은 v1 사유 4개"
+                  "(MFC 전송 확인·안정화 중단·히터 RUN·히터 인터락), 윈도우 옵션 이름 '아무것도 안 함', v1 두께 창 '(선택 안 함)'. '~지 못함'(붙여 씀)은 "
+                  "맞춤법대로라 그대로(챔버K U 글과 같음). 시험 test_wording_c.py 가 묶음 전체와 v2/ch12 문자열을 본다.",
+         reason="사용자 지시 2026-11-27(C)", confirm=False,
+         where="v2/ch12(app·resume·safety·safety_rules·pc_stop·plasma_cleaning·process_view·drivers/rf·heater·stm100·heater_setup·heater_profile·"
+               "blocks·commands·recipe·process_steps·params/*); v2/tests/test_wording_c.py; golden web_ch12_*.json(columnDoc)"),
 ]

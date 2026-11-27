@@ -41,7 +41,7 @@ ACTIONS: Dict[str, str] = {
     "MFC_CMD": "MFC 명령 send_mfc(params[0], params[1]) — FLOW_OFF·VALVE_OPEN·PS_ZEROING·MFC_ZEROING·FLOW_SET·FLOW_ON·"
                "SP1_SET·SP1_ON·SP2_SET·SP2_ON·SP3_ON·SP4_ON·WAIT_PRESSURE, MFC 확인(on_mfc_confirmed(cmd))",
     "PLC_CMD": "PLC 코일 send_plc(name, on, ch) — params=(name, on[, ch]), 이름 정규화(norm_plc_name), PLC 확인(on_plc_confirmed)",
-    "DELAY": "대기 duration ms(카운트다운, polling=True 면 장비 폴링 켬)",
+    "DELAY": "대기 duration ms(카운트다운, polling=True 면 장비 폴링 켜기)",
     "DC_POWER_SET": "DC 연속 send_dc_power(value W) — 목표 도달(on_dc_target_reached)",
     "DC2_POWER_SET": "DC2 연속 send_dc_power2(value W) — 목표 도달(on_dc2_target_reached)",
     "RF_POWER_SET": "RF 연속 send_rf_power(value W) — 목표 도달(on_rf_target_reached)",

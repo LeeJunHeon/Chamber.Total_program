@@ -256,7 +256,7 @@ def power_off_only(system, why: str = "PROGRAM_EXIT", wait_s: float = FORCE_DEAD
     res = {"why": why, "sent": sent, "done": [k for k, v in done.items() if v], "sent_s": round(t_sent, 3),
            "elapsed_s": round(clk.monotonic() - t0, 3)}
     if log is not None:
-        log(f"파워만 끔({why}) — 보냄 {sent}, 끝남 {res['done']}, {res['elapsed_s']:.2f} s")
+        log(f"파워만 끄기({why}) — 보냄 {sent}, 끝남 {res['done']}, {res['elapsed_s']:.2f} s")
     return res
 
 
@@ -649,9 +649,9 @@ class ResumeManager:
             #                                               하나로(11-09 C5: 이전엔 안전 규칙이 있어도 여기서 한 번 더 돌아 두 번 껐다)
         idx = residual_indices(self.sys, now)
         if idx:
-            self.say(f"공정 없음 · 남은 파워 {[DCV_NAMES[k] for k in idx]} — 파워만 끔")
+            self.say(f"공정 없음 · 남은 파워 {[DCV_NAMES[k] for k in idx]} — 파워만 끄기")
             self.residual = power_off_only(self.sys, "RESIDUAL_POWER", heater=False, plc_idx=idx, pulses=False, log=self.say)
-            self.sys.emit("resume", "residual_power_off", f"시작 때 남은 파워 출력 {[DCV_NAMES[k] for k in idx]} — 파워만 끔",
+            self.sys.emit("resume", "residual_power_off", f"시작 때 남은 파워 출력 {[DCV_NAMES[k] for k in idx]} — 파워만 끄기",
                           level="warn", code="RESIDUAL_POWER_OFF", event={"sent": self.residual.get("sent")})
 
 

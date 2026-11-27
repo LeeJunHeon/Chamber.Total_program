@@ -620,7 +620,7 @@ class ProcessViewMixin:
                     r.expect = None
                 r._cancel_countdown()
             self.lk.notify_all()
-        self.log("MAIN", "[EXIT] 프로그램 종료 — 공정 중단(PROGRAM_EXIT), 파워 출력만 끔")
+        self.log("MAIN", "[EXIT] 프로그램 종료 — 공정 중단(PROGRAM_EXIT), 파워 출력만 끄기")
         self.error = "PROGRAM_EXIT"
         self.emit("run_end", "프로그램 종료(PROGRAM_EXIT)", "PROGRAM_EXIT", level="error", result="error",
                   run_id=self.run_id, executed=list(self.executed), recipe=self.seq.record() if self.seq else None)

@@ -233,7 +233,7 @@ def test_ref_wait_released_below_threshold_minus_hyst_and_end_on_stop():
     for _ in range(30):
         r.second()
     ws = [e for e in r.pevents if e.kind == "ref_wait"]
-    assert [(e.data["phase"], e.data.get("why")) for e in ws][2:] == [("start", None), ("end", "RF 끔")]
+    assert [(e.data["phase"], e.data.get("why")) for e in ws][2:] == [("start", None), ("end", "RF 끄기")]
     r.done()
 
 

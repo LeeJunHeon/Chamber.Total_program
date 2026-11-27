@@ -187,7 +187,7 @@ BLOCK_DEFS: tuple = (
         P("change_power", "float", "W", None, min=0.0, min_exclusive=True, label="변경 파워"),
         P("change_label", "str", "", None, label="변경 문구")),
         "OES_RUN(no_wait) · DELAY(polling) [· DC/RF_PULSE_SET · DELAY]", "pc:2687-2731",
-        skippable=True, skip_cleanup=("메인 타이머 끝냄 → 다음 블록(끝 정지가 셔터·파워를 끔)", "OES 측정 정지"),
+        skippable=True, skip_cleanup=("메인 타이머 끝냄 → 다음 블록(끝 정지에서 셔터·파워를 끕니다)", "OES 측정 정지"),
         pausable=True, pause="메인 타이머 정지 — 파워·가스·셔터 그대로(증착은 계속됨). OES 측정 시간은 늘지 않음(미확인)",
         resumable=True, resume_checks=_ALL_RUN_CHECKS),
     BlockDef("thickness_main", "두께 기준 메인 공정", (

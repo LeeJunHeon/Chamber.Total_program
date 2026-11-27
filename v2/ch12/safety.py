@@ -376,7 +376,7 @@ class Ch12Safety:
             if self.bench:
                 self._emit("fired", "S31", "RESIDUAL_POWER_OFF", f"{name} {txt} — bench(읽기 전용)라 보내지 않음", "info")
                 continue
-            self._emit("fired", "S31", "RESIDUAL_POWER_OFF", f"시작 때 {name} 출력이 남아 있음({txt}) — 파워만 끔", "warn")
+            self._emit("fired", "S31", "RESIDUAL_POWER_OFF", f"시작 때 {name} 출력이 남아 있음({txt}) — 파워만 끄기", "warn")
             self._residual_off("S31", name, drv, kind, fwd)
 
     def _residual_off(self, rule: str, name: str, drv, kind: str, fwd) -> None:
@@ -409,7 +409,7 @@ class Ch12Safety:
         if hasattr(e, "program_exit"):
             e.program_exit()
         elif was:
-            e.emit("run_end", f"프로그램 종료 — 파워 출력만 끔({reason})", "PROGRAM_EXIT", level="error", result="error",
+            e.emit("run_end", f"프로그램 종료 — 파워 출력만 끄기({reason})", "PROGRAM_EXIT", level="error", result="error",
                    run_id=e.run_id)
             e.error = "PROGRAM_EXIT"
         e.actions.send = lambda step, runner: None
@@ -439,7 +439,7 @@ class Ch12Safety:
                 done[name] = True
                 clk.notify()
             return fin
-        self._emit("fired", "S32", "POWER_OFF_ONLY", f"의도적 종료({reason}) — 파워 출력만 끔", "warn")
+        self._emit("fired", "S32", "POWER_OFF_ONLY", f"의도적 종료({reason}) — 파워 출력만 끄기", "warn")
         for ch, e in self.proc.items():
             if e is not None and self.hold_process(e, reason):
                 was.append(ch)
@@ -466,7 +466,7 @@ class Ch12Safety:
             if self.heater is not None:
                 self._try(lambda: self.heater.shutdown(on_done=cb("히터 RUN=0")))
             if pc_held:
-                sent.append("플라즈마 클리닝 붙잡음(PC RF 만 끔 — 가스·밸브 그대로)")
+                sent.append("플라즈마 클리닝 붙잡음(PC RF 만 끄기 — 가스·밸브 그대로)")
             if self.tsp is not None and self.tsp.busy:
                 self._try(lambda: self.tsp.abort("PROGRAM_EXIT"))
                 sent.append("TSP 이상 중단(TSP OFF)")

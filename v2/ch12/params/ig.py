@@ -67,7 +67,7 @@ PARAMS: tuple = (
 DROPPED: tuple = (
     Dropped("common.IG_WAIT_TIMEOUT", "효과 없음 — ch1·ch2 구역 값(CH1_/CH2_IG_WAIT_TIMEOUT 900)이 쓰인다(D137)", f"{_S}:79;{_C}:161",
             replaced_by="CH1_IG_WAIT_TIMEOUT"),
-    Dropped("common.IG_INACTIVITY_REOPEN_S", "v1 값 0(끔) — 1초 읽기가 늘 통신", f"{_S}:31;{_C}:60;device/ig.py:1374-1386"),
+    Dropped("common.IG_INACTIVITY_REOPEN_S", "v1 값 0(사용하지 않음) — 1초 읽기가 늘 통신", f"{_S}:31;{_C}:60;device/ig.py:1374-1386"),
     Dropped("common.IG_TCP_KEEPALIVE", "v2 TcpTransport 가 SO_KEEPALIVE 를 늘 켠다(v1 False → 0) — 사용자 확인 필요 후보",
             f"{_S}:40;{_C}:67;device/ig.py:533-541"),
     Dropped("common.IG_WATCHDOG_INTERVAL_MS", "v2 worker 가 끊김 즉시 백오프 재연결(감시 주기 없음)", f"{_S}:76;{_C}:157;device/ig.py:513"),

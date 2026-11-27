@@ -144,7 +144,7 @@ class StopIO:
         rf.stop(on_done=box.set)
         if lost:                                               # S37 PLC 통신 끊김 중단(F) — 0 W 확인을 기다리지 않는다
             self.log("RF", "PLC 통신 끊김 — RF 0 W 확인을 기다리지 않고 나머지 장치로(다시 연결되면 남은 파워 정리)")
-            self.note_rf_off_unconfirmed("PLC 통신 끊김 — 0W 확인 못 함")
+            self.note_rf_off_unconfirmed("PLC 통신 끊김 — 0W 확인되지 않음")
             self.shutdown_rest_devices()
             return
         ok_done = lambda: box.done and box.value is None        # noqa: E731 — 0 W 확인 완료 신호
@@ -253,7 +253,7 @@ class StopIO:
                 self.run_log.close()
                 return
             if getattr(self, "power_only", False):        # 의도적 종료(S32) — 장비 명령 없이 기록·소유만 정리
-                self.log("MAIN", "[CLEANUP] 의도적 종료 — RF 안전 정지·가스 OFF·VALVE OPEN 생략(PC RF 는 S32 가 즉시 끔, MFC 그대로)")
+                self.log("MAIN", "[CLEANUP] 의도적 종료 — RF 안전 정지·가스 OFF·VALVE OPEN 생략(PC RF 는 S32 가 바로 끄고, MFC 그대로)")
                 self.process_timer_active = False
                 if not self.mfc_release_done:
                     try:

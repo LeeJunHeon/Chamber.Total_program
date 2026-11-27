@@ -149,7 +149,7 @@ def test_sim_default_no_uplink(tmp_path):
     app, lines = _in_process(tmp_path, web, UPLINK_IN_SIM=False, EQUIPMENT_ID="CH12")
     assert app.start() == A.EXIT_OK
     try:
-        assert app.uplink is None and "웹 연결 끔(sim)" in lines
+        assert app.uplink is None and "웹 연결 사용하지 않음(sim)" in lines and "웹 연결 끔(sim)" not in lines
         assert app.system.hub.state_data({})["uplink"] == {"enabled": False}
         assert app.server is not None and app.instance_sock is None                     # 서버가 소켓을 이어받음
         code, raw = _get(app.server.port, "/api/v1/hello")
@@ -168,7 +168,7 @@ def test_uplink_in_sim_requires_sim_id_and_empty_url_warns(tmp_path):
     app, lines = _in_process(tmp_path / "b", web, UPLINK_URL="")
     assert app.start() == A.EXIT_OK
     try:
-        assert app.uplink is None and "웹 연결 주소 없음 — 연결 안 함" in lines
+        assert app.uplink is None and "웹 연결 주소 없음 — 연결하지 않음" in lines
         assert any("UPLINK_URL 이 비어 있음" in s for s in lines)
     finally:
         app.shutdown()

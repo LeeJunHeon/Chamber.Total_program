@@ -32,7 +32,7 @@ PARAMS: tuple = (
          note="실효값 false — .py 기본값 True 를 settings.json common 이 false 로 덮는다(inv_cfg CFG-019). "
               "devices_v1facts 의 so_keepalive=1 은 .py 기본값 기준"),
     inst("TSP_INACTIVITY_REOPEN_S", "tsp", "TSP 유휴 재연결", I, 0, lo=0, hi=3600, unit="s", src=f"{_S}:33;{_C}:62",
-         note="v1 에서 읽는 곳 없음(선언만) — v2 도 쓰지 않는다(0 = 사용 안 함)"),
+         note="v1 에서 읽는 곳 없음(선언만) — v2 도 쓰지 않는다(0 = 사용하지 않음)"),
     _g("TSP_WRITE_TIMEOUT_S", "TSP 응답 바이트 제한", "s", F, 1.2, 0.1, 30.0,
        src=f"{_S}:390;{_C}:578;device/tsp.py:148-151;device/tsp.py:273-293",
        desc="v1 io_timeout — 송신 drain·수신 한 바이트마다의 제한"),

@@ -93,7 +93,7 @@ def settings(cfg: Dict[str, Any], chamber: str) -> StmSettings:
     host = str(cfg[p + "THICKNESS_TCP_HOST"] or "").strip()
     port = int(cfg[p + "THICKNESS_TCP_PORT"])
     if enabled and (not host or not (1 <= port <= 65535)):
-        warns.append(f"THICKNESS_TCP_HOST/PORT={host!r}:{port} 가 올바르지 않음 → 두께 모니터 끔")
+        warns.append(f"THICKNESS_TCP_HOST/PORT={host!r}:{port} 가 올바르지 않음 → 두께 모니터 사용하지 않음")
         enabled = False
     poll = _in_range(p + "THICKNESS_POLL_INTERVAL_S", cfg[p + "THICKNESS_POLL_INTERVAL_S"], 0.25, 5.0)
     slow = _in_range(p + "THICKNESS_SLOW_POLL_S", cfg[p + "THICKNESS_SLOW_POLL_S"], poll, 60.0)

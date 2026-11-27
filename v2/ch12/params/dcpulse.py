@@ -106,5 +106,5 @@ DROPPED: tuple = (
     Dropped("common.DCP_WRITE_WORKER_RETRIES", "v1 값 0(쓰기는 1회 전송 — 재시도는 DCP_RECOVER_MAX_ATTEMPTS) — v2 는 0 고정",
             "device/dc_pulse.py:478"),
     Dropped("common.DCP_WATCHDOG_INTERVAL_MS", "v1 워치독 루프의 연결 확인 주기 — v2 는 worker 가 끊김을 즉시 안다", "device/dc_pulse.py:2144"),
-    Dropped("common.DCP_INACTIVITY_REOPEN_S", "v1 값 0(무통신 재연결 끔) — v2 도 하지 않음", "device/dc_pulse.py:3164-3170"),
+    Dropped("common.DCP_INACTIVITY_REOPEN_S", "v1 값 0(무통신 재연결 사용하지 않음) — v2 도 하지 않음", "device/dc_pulse.py:3164-3170"),
 )

@@ -87,7 +87,7 @@ RULES: Tuple[Rule, ...] = (
       "runtime/chamber_runtime.py:3700-3760·4013-4040 (PROC-101·102, 챗 E301)", GATE_P, "5회 × 0.2 s", ("PREFLIGHT",),
       (_rej("MAIN_VALVE_CHECK_FAILED"), _note("error", "E301")), reason="MAIN_VALVE_CHECK_FAILED"),
     R("S4", "시작 전 장비 연결 확인", "reject", "state:PREFLIGHT",
-      "이번 런 장비(MFC·IG·고른 펄스 전원)가 한도 안에 연결 안 되면 '장비 연결 실패' — 시작 안 함", "chamber",
+      "이번 런 장비(MFC·IG·고른 펄스 전원)가 한도 안에 연결 안 되면 '장비 연결 실패' — 시작하지 않음", "chamber",
       "process_preflight(PreflightMixin)", "runtime/chamber_runtime.py:3929-3977 (UI-090)",
       ("CHAMBER_PREFLIGHT_TIMEOUT_S", "CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S"), "CHAMBER_PREFLIGHT_TIMEOUT_S(8 s·펄스 10 s)",
       ("PREFLIGHT",), (_rej("PREFLIGHT_FAILED"),), reason="PREFLIGHT_FAILED"),
@@ -153,7 +153,7 @@ RULES: Tuple[Rule, ...] = (
       "runtime/plasma_cleaning_runtime.py:618-631·1235-1275 (PC-006·008~012)", duration="60 s",
       states=("pc.idle",), actions=(_rej("E205"),), reason="E205"),
     R("S18", "플라즈마 클리닝 GV 인터락", "reject", "state:pc.preflight",
-      "G_V_n_인터락 읽기(0.6 s) FALSE·실패면 시작 안 함(E302·E511) — 켠 것이 없어도 정리 순서를 탄다(v1 그대로)", "pc",
+      "G_V_n_인터락 읽기(0.6 s) FALSE·실패면 시작하지 않음(E302·E511) — 켠 것이 없어도 정리 순서를 탄다(v1 그대로)", "pc",
       "pc_preflight", "runtime/plasma_cleaning_runtime.py (PC-025·026)", states=("pc.preflight",),
       actions=(_rej("E302"),), reason="E302"),
     R("S19", "플라즈마 클리닝 채널 전환 금지", "reject", "command", "실행 중 CH1/CH2 라디오 전환 거부·이전 선택 유지", "pc",
@@ -229,7 +229,7 @@ RULES: Tuple[Rule, ...] = (
       "챔버 공정이 전원을 켠 뒤(DC1·DC2·DC Pulse·RF Pulse·RF 켜기 단계 시작)부터 정지 순서가 시작되기 전까지, PLC 또는 그 챔버 MFC 의 "
       "1초 행 품질(plc.q·chN.mfc.q)이 fail(또는 링크가 끊긴 채 stale)인 시간이 설정 이상이면 그 챔버 공정 중단(지금 abort 경로 — 정지 "
       "순서, 끊긴 장치 단계가 실패해도 끝까지). Plasma Cleaning 도 RF 가 켜진 동안 같은 규칙(PC 가 쓰는 챔버 MFC). ok·late 행이 오면 "
-      "0 으로, 명령에 양보해 건너뛴 stale(링크 살아 있음)·suppressed 행은 세지 않는다. 전원을 켜기 전 단계는 판정하지 않는다. 0 = 끔",
+      "0 으로, 명령에 양보해 건너뛴 stale(링크 살아 있음)·suppressed 행은 세지 않는다. 전원을 켜기 전 단계는 판정하지 않는다. 0 = 사용하지 않음",
       "chamber", "safety.Ch12Safety.comm_loss", "v1 에 없음 — 사용자 결정 2026-11-26(F · 챔버K 와 같은 설정 이름)",
       ("PLC_COMM_LOSS_ABORT_SEC", "MFC_COMM_LOSS_ABORT_SEC"), "PLC 15 s · MFC 30 s", states=RUN,
       actions=(_abort("PLC_COMM_LOST"), _abort("MFC_COMM_LOST"), _note("warn", "PLC_COMM_LOST")), reason="PLC_COMM_LOST"),
@@ -244,7 +244,7 @@ RULES: Tuple[Rule, ...] = (
       "챔버 공정이 RF Pulse(DC Pulse) 출력을 켠 뒤(RF_PULSE_START·DC_PULSE_START 단계 시작)부터 정지 순서가 시작되기 전까지, 그 챔버 "
       "펄스 전원의 1초 행 품질(chN.rfpulse.q·chN.dcpulse.q)이 fail(또는 링크가 끊긴 채 stale)인 시간이 설정 이상이면 그 챔버 공정 중단"
       "(경고 사건 1번 — 지금 abort 경로). 정지 순서는 그 링크가 아직 끊겨 있으면 그 전원의 꺼짐 확인을 기다리지 않고 다음 단계로(살아 "
-      "있는 장치 끄기가 판정 뒤 20 s 안에). 포트를 잡지 않은(쓰지 않는) 펄스 장비는 세지 않는다. 0 = 끔",
+      "있는 장치 끄기가 판정 뒤 20 s 안에). 포트를 잡지 않은(쓰지 않는) 펄스 장비는 세지 않는다. 0 = 사용하지 않음",
       "chamber", "safety.Ch12Safety.comm_loss", "v1 에 없음 — 사용자 결정 2026-11-27(P)",
       ("RFPULSE_COMM_LOSS_ABORT_SEC", "DCPULSE_COMM_LOSS_ABORT_SEC"), "RF Pulse 30 s · DC Pulse 30 s", states=RUN,
       actions=(_abort("RFP_COMM_LOST"), _abort("DCP_COMM_LOST"), _note("warn", "RFP_COMM_LOST")), reason="RFP_COMM_LOST"),

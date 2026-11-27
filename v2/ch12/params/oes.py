@@ -58,7 +58,7 @@ PARAMS: tuple = (
     inst("OES_WORKER_EXE", G, "OES 워커 exe(onedir)", S, "", pattern=ANY,
          desc="비면 소스 실행(python -m v2.ch12.workers.oes_worker). 값이 있는데 파일이 없으면 v1 처럼 '워커 exe 없음'"),
     inst("OES_WORKER_FAKE", G, "OES 가짜 분광기(sim)", B, False, desc="워커를 --fake 로(DLL 없이 같은 JSONL 계약) — sim·시험용"),
-    inst("OES_HEARTBEAT_S", G, "OES 워커 하트비트 간격", F, 1.0, 0.0, 60.0, unit="s", desc="0 이면 끔. 나이는 링크 status() 에"),
+    inst("OES_HEARTBEAT_S", G, "OES 워커 하트비트 간격", F, 1.0, 0.0, 60.0, unit="s", desc="0 이면 사용하지 않음. 나이는 링크 status() 에"),
 )
 
 DROPPED: tuple = (

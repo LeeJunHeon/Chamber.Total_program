@@ -283,10 +283,10 @@ class App:
 
     def _uplink_line(self) -> str:
         if not self.uplink_wanted():
-            return "끔(sim)"
+            return "사용하지 않음(sim)"
         url = str(self.cfg.get("UPLINK_URL") or "")
         if not url:
-            return "주소 없음 — 연결 안 함"
+            return "주소 없음 — 연결하지 않음"
         u = urlsplit(url)
         return f"{u.hostname}({u.scheme})"                   # 호스트만 — 경로·토큰은 쓰지 않는다
 
@@ -583,7 +583,7 @@ class App:
         if why == "SIGTERM" and not self._exit_done and s is not None and s.busy() and getattr(s, "safety", None) is not None:
             self._exit_started = True
             res = s.safety.power_off_only("PROGRAM_EXIT")      # 의도적 종료 — 파워 출력만(챔버K 결정 4, safety S32)
-            self.log.warning("의도적 종료(%s) — 파워만 끔: %s", why, res)
+            self.log.warning("의도적 종료(%s) — 파워만 끄기: %s", why, res)
         self._teardown()
         self.say("종료")
 

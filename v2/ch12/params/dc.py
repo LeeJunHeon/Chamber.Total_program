@@ -23,7 +23,7 @@ PARAMS: tuple = (
     p("DC_LOW_CURRENT_STREAK_N", _G, "DC 저전류 연속 횟수", "회", I, 3, 1, 100, safety=H, src="lib/config_common.py:214"),
     p("DC_LOW_CURRENT_LOWP_MAX_W", _G, "저전류 기준 저파워 구간 상단", "W", F, 50.0, 0.0, 1000.0, safety=H,
       src="lib/config_common.py:215 · lib/power_limits.py dc_low_current_lowp_cfg(v1 main 2fc00c4)",
-      desc="설정 파워가 이 값 이하이면 저전류 기준을 DC_LOW_CURRENT_LOWP_THRESH_A 로(0 = 끔, 항상 DC_LOW_CURRENT_THRESH_A). "
+      desc="설정 파워가 이 값 이하이면 저전류 기준을 DC_LOW_CURRENT_LOWP_THRESH_A 로(0 = 사용하지 않음, 항상 DC_LOW_CURRENT_THRESH_A). "
            "2026-11-13 CH2 'Si_35W' 가 meas=0.049A ≤ 0.050A 로 중단된 오탐 대응"),
     p("DC_LOW_CURRENT_LOWP_THRESH_A", _G, "저파워 구간 저전류 기준", "A", F, 0.01, 0.0, 10.0, safety=H,
       src="lib/config_common.py:216 · lib/power_limits.py dc_low_current_thresh_a(v1 main 2fc00c4)",

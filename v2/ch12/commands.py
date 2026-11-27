@@ -456,10 +456,10 @@ COMMANDS: tuple = (
       (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool"),
        _a("by_name", "str", False, desc="웹 — 로그인한 사람 이름(웹 서버가 넣는다, 화면·기록용 — 계정은 requestedBy)")),
       "v1 PLC 스위치 코일 쓰기(write_switch). 인터락은 PLC 래더(공정 중에도 누를 수 있음 — 사용자 결정 2026-11-20). "
-      "버튼마다 사건 plc_button 하나(버튼·켬/끔·누가·웹/노트북·결과·그 챔버 공정 상태 — D425), SYSTEM 일자 로그에 늘, 공정 중이면 그 챔버 공정 로그에도",
+      "버튼마다 사건 plc_button 하나(버튼·켜기/끄기·누가·웹/노트북·결과·그 챔버 공정 상태 — D425), SYSTEM 일자 로그에 늘, 공정 중이면 그 챔버 공정 로그에도",
       "device/plc.py:1747-1830 PLC 명령(door·gate·shutter·vent·turbo·pin·gas·select …)"),
     C("BUZZ_STOP", "부저 정지", "shared", BOTH, (ANY,), ("PLC_LINK_UP",), (),
-      "BUZZER_STOP_SW(M01000) 켬 — v1 PlcDriver.buzzer_stop 과 같은 동작(PLC_BUTTON buzzer_stop_sw 와 같은 코일)",
+      "BUZZER_STOP_SW(M01000) 켜기 — v1 PlcDriver.buzzer_stop 과 같은 동작(PLC_BUTTON buzzer_stop_sw 와 같은 코일)",
       "device/plc.py:1810-1811 buzzer_stop(v1 화면 버튼 없음 — PLC API)"),
     C("RUNTIME_DUMP", "런타임 덤프", "shared", BOTH, (ANY,), (), (_a("reason", "str", False),),
       "LOG_ROOT_DIR\\RUNTIME_DUMP 에 상태·스레드 덤프(동시에 1개)", "RuntimeDump_button → main.py:841-844·1170-1207"),

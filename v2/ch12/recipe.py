@@ -51,7 +51,7 @@ COLUMN_DOC: Dict[str, tuple] = {
     "#": ("'test' 면 TEST 행(장비 제어 없이 time 만큼 대기), 그 밖은 번호(Process_name 이 비면 이름)", "", "", "test_mode"),
     "Process_name": ("공정 이름(비면 '#' → '공정 N'). 'delay 10m' 꼴이면 대기 행", "", "", "process_note"),
     "delay": ("대기 행 — 숫자만이면 분, 아니면 30s·5m·1h30m(단위 없는 숫자 문자열 해석 0 초)", "분", "대기 행 아님", ""),
-    "chuck_position": ("공정 전 Chuck 위치 up/mid/down", "", "이동 안 함", "chuck_position"),
+    "chuck_position": ("공정 전 Chuck 위치 up/mid/down", "", "이동하지 않음", "chuck_position"),
     "main_shutter": ("T 면 Main Shutter 열기(닫기는 항상)", "T/F", "F", "use_ms"),
     "integration_time": ("OES 적분 시간", "ms", "60", "integration_time"),
     "Ar": ("Ar 사용", "T/F", "F", "use_ar"), "O2": ("O2 사용", "T/F", "F", "use_o2"),

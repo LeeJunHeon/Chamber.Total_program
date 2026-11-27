@@ -20,7 +20,7 @@ def init_ch2_heater(cfg: Mapping[str, Any], build: Callable[[], Any],
     try:
         hcfg, _warns = load_heater_cfg(cfg, "CH2_")
     except Exception as e:
-        log("HEATER", f"히터 설정 읽기 실패 — 히터 기능 끔: {e!r}")
+        log("HEATER", f"히터 설정 읽기 실패 — 히터 기능 사용하지 않음: {e!r}")
         return None
     if not hcfg.enabled:
         return None
