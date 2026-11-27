@@ -665,6 +665,7 @@
     "PROCESS_GAS_STEP_LEVELS": {"O2": [9.0, 9.5]},   // 가스 단계 설정: 목표가 이 값보다 크면 이 값을 먼저 거쳐 감, 단위 sccm, 각 단계는 3회 연속 도달 후 다음 (작은 순서, 중복 없음)
 
     "PC_RF_PULSE_POST_ON_DELAY_MS": 30000,           // RF Pulse ON 후 안정화 대기 (ms). CH1과 달리 30초로 설정
+    "PROCESS_POWER_SELECT_AUTO_ENABLED": true,       // 공정이 SW_POWER_SELECT(P00037) 를 자동으로 켜고 끔(RF 연속 시작 전 OFF, RF Pulse 시작 전 ON·종료 때 OFF·긴급 정지 OFF). false = 바꾸지 않음(릴레이 그대로). 이 구역(ch2)에 있어야 적용됨 — common 에 넣으면 CH2 공정에 반영되지 않음
     "RFPULSE_REFP_WARN_WATTS": 5.0,                  // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
 
     // ── 두께 모니터 (CH2, Sycon STM-100/MF) ── MOXA NPort TCP Server 경유 RS-232 9600-8-N-1

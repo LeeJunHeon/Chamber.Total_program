@@ -1968,6 +1968,7 @@ class ProcessController:
             self._expect_group = None
 
         try:
+            self._ps_off_logged = False
             shutdown_steps = self._create_shutdown_sequence(self.current_params or {})
             if shutdown_steps:
                 self._emit_log("Process", f"종료 절차 생성 완료: {len(shutdown_steps)}단계")
@@ -2196,7 +2197,17 @@ class ProcessController:
             return e.detail
         return ""
 
+    def _power_select_auto_on(self) -> bool:
+        """SW_POWER_SELECT 자동 제어 사용 여부(PROCESS_POWER_SELECT_AUTO_ENABLED, 기본 True).
+        꺼져 있으면 시퀀스 생성마다 한 번 로그를 남긴다(_ps_off_logged — 시퀀스를 만드는 곳에서 False 로 되돌린다)."""
+        on = bool(getattr(self._cfg, "PROCESS_POWER_SELECT_AUTO_ENABLED", True))
+        if not on and not getattr(self, "_ps_off_logged", False):
+            self._ps_off_logged = True
+            self._emit_log("Process", "Power Select 자동 제어 꺼짐(설정) — SW_POWER_SELECT 를 바꾸지 않음")
+        return on
+
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
+        self._ps_off_logged = False
         # ------------------------------------------------------------
         # TEST MODE : 실제 장비 제어 없이 시간만 흘려보내기
         # ------------------------------------------------------------
@@ -2526,7 +2537,7 @@ class ProcessController:
         if use_rf:
             # RF 연속 사용 전에 POWER_SELECT = False
             # ⚠ RF Pulse와 동시 사용 시에는 릴레이를 펄스 경로(ON)로 유지 — 배선 확인 후 필요 시 조정
-            if not use_rf_pulse:
+            if not use_rf_pulse and self._power_select_auto_on():
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD,
                     params=("SW_POWER_SELECT", False),
@@ -2600,7 +2611,7 @@ class ProcessController:
 
         if use_rf_pulse:
             # ✅ CH2에서만 POWER_SELECT ON
-            if self._ch == 2:
+            if self._ch == 2 and self._power_select_auto_on():
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD,
                     params=("SW_POWER_SELECT", True),
@@ -2846,7 +2857,7 @@ class ProcessController:
             ))
 
             # ✅ CH2에서 RF Pulse를 쓴 경우에만 POWER_SELECT OFF
-            if self._ch == 2:
+            if self._ch == 2 and self._power_select_auto_on():
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD,
                     params=("SW_POWER_SELECT", False),
@@ -2904,6 +2915,7 @@ class ProcessController:
     def _create_emergency_shutdown_sequence(self) -> List[ProcessStep]:
         if not self.current_params:
             return []
+        self._ps_off_logged = False
 
         # ✅ 공통 정보는 항상 방어적으로 가져오기
         ci = self._get_common_process_info(self.current_params or {}) or {}
@@ -2951,7 +2963,7 @@ class ProcessController:
             ))
             
             # ✅ CH2에서 RF Pulse를 쓴 경우에만 POWER_SELECT 즉시 OFF
-            if self._ch == 2:
+            if self._ch == 2 and self._power_select_auto_on():
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD,
                     params=("SW_POWER_SELECT", False),
