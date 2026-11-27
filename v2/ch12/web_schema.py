@@ -97,6 +97,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      run_end 사유), S40 info RESIDUAL_POWER_OFF(끄기를 다시 보냄 한 번). 정지 순서는 끊긴 펄스의 꺼짐 확인을 기다리지 않는다(D433).
      N: 챔버K 와 이름·말 맞추기 — 사유 MFC_COMM_LOSS 를 지우고 MFC_COMM_LOST(설정 키 MFC_COMM_LOSS_ABORT_SEC 는 그대로, help 는 챔버K 글),
      화면 글 '두절' → '끊김'(MFC 재연결 간격 설명·규칙 S8 글), params RF_UNCOMMANDED_GRACE_SEC(5 s, 0~30 — 예전 고정값 UNCMD_GRACE_S)(D434).
+     W: 윈도우 전원 설정 경고 — 시작 때 읽기만, 위험하면 eventKinds selfwatch/power_settings(warn — 평소 로그), 사유 POWER_SETTINGS(info —
+     챔버K 와 같은 이름·글)(D435).
 """
 from __future__ import annotations
 
@@ -177,7 +179,8 @@ EVENT_KINDS: tuple = (
     ("rga", "finished", "RGA 측정 끝", _M), ("rga", "failed", "RGA 실패", _M), ("rga", "rejected", "RGA 거부", _M),
     ("rga", "data", "RGA 값", _D), ("rga", "status", "RGA 상태", _D),
     ("selfwatch", "selfwatch", "프로그램 자기 감시", _M),
-    ("selfwatch", "keep_awake_on", "절전 막기 시작", _D), ("selfwatch", "keep_awake_off", "절전 막기 끝", _D), ("outputs", "internal_error", "기록 출력 오류", _M),
+    ("selfwatch", "keep_awake_on", "절전 막기 시작", _D), ("selfwatch", "keep_awake_off", "절전 막기 끝", _D),
+    ("selfwatch", "power_settings", "장비 노트북 전원 설정", _M), ("outputs", "internal_error", "기록 출력 오류", _M),
     ("uplink", "uplink_down", "웹 연결 끊김", _M), ("uplink", "uplink_up", "웹 연결 다시 됨", _M),
     ("uplink", "uplink_auth_failed", "웹 토큰 거부", _M), ("uplink", "uplink_conflict", "웹이 이 실행을 받지 않음", _M),
     ("uplink", "uplink_too_large", "웹이 받지 않는 큰 메시지", _M), ("uplink", "uplink_spool_full", "웹 보관함 가득", _M),

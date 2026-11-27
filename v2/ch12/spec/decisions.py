@@ -994,4 +994,14 @@ DECISIONS += [
          reason="사용자 결정 2026-11-27(N)", confirm=False,
          where="v2/ch12/commands.py; v2/ch12/safety.py·safety_rules.py; v2/ch12/params/mfc.py·rf.py; v2/ch12/app.py(_start_lines); "
                "v2/ch12/drivers/rf.py(_decode); v2/tests/test_names_like_chk.py·test_comm_loss.py"),
+    dict(id="D435", title="2026-11-27 윈도우 전원 설정 경고 — 시작 때 읽기만, 덮개 닫기·절전 시간·배터리면 한 줄 + 경고 사건(W)",
+         decision="절전 막기(KEEP_AWAKE — SetThreadExecutionState)는 사용자가 시킨 절전(덮개 닫기·전원 버튼)을 막지 못한다. 프로그램이 시작할 때 "
+                  "윈도우 전원 설정을 읽기만 한다(powrprof PowerGetActiveScheme·PowerReadAC/DCValueIndex — 덮개 닫기 동작 AC·배터리, AC 절전 "
+                  "시간 / kernel32 GetSystemPowerStatus — 지금 AC 전원인지). 덮개 닫기가 '아무것도 안 함'이 아니거나 AC 절전 시간이 '없음'이 "
+                  "아니거나 배터리로 돌고 있으면 시작 줄 한 줄('[주의] 장비 노트북 전원 설정: …' — 콘솔 한 번·파일 WARNING)과 경고 사건 1번"
+                  "(selfwatch power_settings, 사유 POWER_SETTINGS — 챔버K W-25 A5 와 같은 이름·글). 설정은 바꾸지 않는다. 윈도우가 아니거나 "
+                  "읽지 못하면 조용히 넘어간다(챔버K 는 읽기 실패를 상세 사건으로 남김 — 챔버12 는 지시대로 조용히).",
+         reason="사용자 결정 2026-11-27(W)", confirm=False,
+         where="v2/ch12/keep_awake.py(PowerInfo·power_warning·check_power·windows_power); v2/ch12/app.py(start_keep_awake·power_reader); "
+               "v2/ch12/commands.py(POWER_SETTINGS); v2/ch12/web_schema.py(eventKinds); v2/tests/test_power_settings.py"),
 ]

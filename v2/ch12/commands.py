@@ -88,6 +88,7 @@ CH12_REASONS: tuple = (
     Reason("PLC_BUTTON", "PLC 버튼", "info"),
     Reason("PLC_BUTTON_FAILED", "PLC 버튼 쓰기 실패", "fail"),
     Reason("LOG_CLEAR", "화면 로그 지우기", "info"),
+    Reason("POWER_SETTINGS", "장비 노트북 전원 설정 확인", "info"),
 )
 
 # 사유 운전자용 설명(묶음 16 ② — 왜 생겼는지·무엇을 하면 되는지 한 문장, 70자 안). Reason.help 가 비면 이 표. 사유 code·category·
@@ -166,6 +167,7 @@ REASON_HELP: Dict[str, str] = {
     "PLC_COMM_LOST": "PLC 와 통신이 끊긴 채 이어져 공정을 멈췄습니다. 랜 케이블과 전원을 확인하세요.",
     "MFC_COMM_LOST": "MFC 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
     "RFP_COMM_LOST": "RF Pulse 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
+    "POWER_SETTINGS": "덮개를 닫거나 오래 두면 노트북이 절전될 수 있습니다. 윈도우 전원 설정에서 덮개 닫기와 절전을 바꾸세요.",
     "DCP_COMM_LOST": "DC Pulse 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
     "PROGRAM_RESTART": "프로그램을 다시 켰지만 이어갈 조건이 맞지 않아 정지 순서를 실행했습니다.",
     "RESIDUAL_POWER_OFF": "시작할 때 파워 출력이 남아 있고 공정이 없어 파워만 껐습니다.",

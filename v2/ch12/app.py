@@ -415,11 +415,19 @@ class App:
         self.beacon.start()
 
     def start_keep_awake(self, s: Ch12System) -> None:
-        """윈도우 절전 막기(G — keep_awake.py). 윈도우가 아니면 아무것도 하지 않는다. 종료(_teardown) 때 같은 스레드가 푼다."""
-        from v2.ch12.keep_awake import KeepAwake, windows_api
+        """윈도우 절전 막기(G — keep_awake.py). 윈도우가 아니면 아무것도 하지 않는다. 종료(_teardown) 때 같은 스레드가 푼다.
+        W: 절전 막기는 덮개 닫기·전원 버튼 절전을 막지 못해 전원 설정을 읽기만 하고(check_power), 위험하면 시작 줄 한 줄 + 경고 사건 1번."""
+        from v2.ch12.keep_awake import KeepAwake, check_power, windows_api
         self.keep_awake = KeepAwake(s.cfg, s.busy, lambda kind, detail: s.emit("selfwatch", kind, detail, level="info"),
                                     api=windows_api())
         self.keep_awake.start()
+        check_power(self.power_reader(), lambda line: self.warn_once(line, "%s", line),
+                    lambda msg, _data: s.emit("selfwatch", "power_settings", msg, level="warn", code="POWER_SETTINGS"))
+
+    def power_reader(self):
+        """윈도우 전원 설정 읽기 함수(W) — 윈도우가 아니면 None. 시험은 이 메서드를 가짜로 바꾼다."""
+        from v2.ch12.keep_awake import windows_power
+        return windows_power()
 
     def start_uplink(self, s: Ch12System) -> None:
         """웹 연결 — 정책이 연결일 때만(prod·bench, sim 은 UPLINK_IN_SIM). 실패해도 웹 없이 운전(공정·안전은 그대로)."""
