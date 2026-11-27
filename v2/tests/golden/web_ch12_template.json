@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — v1 행 → 기본 템플릿 블록(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "13a46d6f493bd7b46575f14623567bdba6c12f7e07e2205e7fec164f24575a14",
+ "defsHash": "eef4864a577e15b938c92969df681489997d336cf4a30fd117d9c01b5a9bf6de",
  "defs": {
   "version": 1,
   "blocks": {
@@ -1166,6 +1166,15 @@
      "msg": "{pre}: {k}: 이 챔버는 {lab} 미지원"
     },
     {
+     "id": "rf_operating_max",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "rf_power 숫자 · Caps.rf · 값 > RF 운전 상한(recipe_check.rf_operating_max — RF_OPERATING_MAX_W, 없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)",
+     "msg": "{pre}: rf_power: {v:g} > {lim:g} W(운전 상한 RF_OPERATING_MAX_W)"
+    },
+    {
      "id": "pulse_exclusive",
      "blocks": [
       "power_on"
@@ -1674,6 +1683,16 @@
      "key": "CH2_HEATER_MAX_TEMP",
      "default": 900.0,
      "use": "히터 목표 상한"
+    },
+    {
+     "key": "RF_MAX_POWER",
+     "default": 600.0,
+     "use": "RF 운전 상한의 위 한도(전원 정격)"
+    },
+    {
+     "key": "RF_OPERATING_MAX_W",
+     "default": null,
+     "use": "CH2 RF 운전 상한(없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)"
     }
    ],
    "channelRule": "CH{n}_키 값이 null 이 아니면 그것, 아니면 키 값, 둘 다 null 이면 기본값. 목록·사전 기본값인 키는 글이면 JSON",
@@ -2270,6 +2289,8 @@
   "PC_WORKING_PRESSURE_BOOST_TARGET": 10.0,
   "PROCESS_DEFAULT_BASE_PRESSURE": 1e-05,
   "PROCESS_DEFAULT_OES_INTEGRATION_MS": 60,
+  "RF_MAX_POWER": 600.0,
+  "RF_OPERATING_MAX_W": 360.0,
   "SUPPORTS_DC": true,
   "SUPPORTS_DC2": false,
   "SUPPORTS_DCPULSE": true,

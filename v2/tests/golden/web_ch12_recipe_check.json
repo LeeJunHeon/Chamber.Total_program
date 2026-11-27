@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "13a46d6f493bd7b46575f14623567bdba6c12f7e07e2205e7fec164f24575a14",
+ "defsHash": "eef4864a577e15b938c92969df681489997d336cf4a30fd117d9c01b5a9bf6de",
  "defs": {
   "version": 1,
   "blocks": {
@@ -1166,6 +1166,15 @@
      "msg": "{pre}: {k}: 이 챔버는 {lab} 미지원"
     },
     {
+     "id": "rf_operating_max",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "rf_power 숫자 · Caps.rf · 값 > RF 운전 상한(recipe_check.rf_operating_max — RF_OPERATING_MAX_W, 없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)",
+     "msg": "{pre}: rf_power: {v:g} > {lim:g} W(운전 상한 RF_OPERATING_MAX_W)"
+    },
+    {
      "id": "pulse_exclusive",
      "blocks": [
       "power_on"
@@ -1674,6 +1683,16 @@
      "key": "CH2_HEATER_MAX_TEMP",
      "default": 900.0,
      "use": "히터 목표 상한"
+    },
+    {
+     "key": "RF_MAX_POWER",
+     "default": 600.0,
+     "use": "RF 운전 상한의 위 한도(전원 정격)"
+    },
+    {
+     "key": "RF_OPERATING_MAX_W",
+     "default": null,
+     "use": "CH2 RF 운전 상한(없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)"
     }
    ],
    "channelRule": "CH{n}_키 값이 null 이 아니면 그것, 아니면 키 값, 둘 다 null 이면 기본값. 목록·사전 기본값인 키는 글이면 JSON",
@@ -2237,7 +2256,9 @@
   "CH1_RFPULSE_FREQ_MAX_HZ": 30000,
   "CH2_HEATER_MAX_TEMP": 900.0,
   "CH2_HEATER_SV_LIMIT_C": 900.0,
-  "CH2_RFPULSE_FREQ_MAX_HZ": 30000
+  "CH2_RFPULSE_FREQ_MAX_HZ": 30000,
+  "RF_MAX_POWER": 600.0,
+  "RF_OPERATING_MAX_W": 360.0
  },
  "rawCases": [
   {"name": "durations", "rows": [{"#": "", "Process_name": "d1", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "30", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d2", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "1h30", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d3", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "0s", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d4", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": " 5M ", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d5", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "10", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d6", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "3us", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "1.5h", "change_power_value": "5", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": null, "errors": ["3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')", "6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')", "7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다"], "message": "레시피 오류 5건:\n - 3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')\n - 6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')\n - 7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다", "popup": "레시피 오류 5건:\n- 3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')\n- 6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')\n- 7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다"},
@@ -2325,6 +2346,11 @@
   {"name": "dcp_freq_zero", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "use_dc_pulse": true, "dc_pulse_power": 5.0, "dc_pulse_freq": 0, "dc_pulse_off_time": 10.5}, "errors": ["DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 10.5µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"]},
   {"name": "dcp_off_dc_text", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 5.0, "dc_pulse_off_time": " dc "}, "errors": []},
   {"name": "heater_limits_edges", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_g2": true, "use_rf_power": true, "rf_power": 1.0, "use_heater": true, "heater_temp": 0.5, "heater_ramp": null, "heater_soak": 0.0}, "errors": []},
+  {"name": "rf_over_operating_max", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "rf_power": 361.0}, "errors": ["RF Target Power(W)는 운전 상한 360 W 이하여야 합니다 (현재 361, RF_OPERATING_MAX_W)"]},
+  {"name": "rf_at_operating_max_text", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "rf_power": " 360 "}, "errors": []},
+  {"name": "rf_over_text_and_unused", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "rf_power": "400.5", "use_dc_power": true, "dc_power": 700.0}, "errors": ["RF Target Power(W)는 운전 상한 360 W 이하여야 합니다 (현재 400.5, RF_OPERATING_MAX_W)"]},
+  {"name": "rf_over_but_not_used", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_dc_power": true, "dc_power": 100.0, "rf_power": 999.0}, "errors": []},
+  {"name": "rf_power_bad_text", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "rf_power": "abc"}, "errors": []},
   {"name": "heater_ramp_zero", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "use_heater": true, "heater_temp": 1e-07, "heater_ramp": 0.0, "heater_soak": 480.1}, "errors": ["heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 0.0)", "heater_soak 는 0~480분이어야 합니다 (현재 480.1)"]}
  ]
 }

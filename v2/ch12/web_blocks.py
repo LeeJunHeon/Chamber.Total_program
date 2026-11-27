@@ -45,6 +45,10 @@ VALUE_RULES: tuple = (
     dict(id="power_cap", blocks=["power_on"], kind="error",
          when="dc_power·dc2_power·rf_power·dcp_power·rfp_power 순서로 — 숫자인데 Caps(dc·dc2·rf·dcp·rfp)가 꺼짐",
          msg="{pre}: {k}: 이 챔버는 {lab} 미지원"),
+    dict(id="rf_operating_max", blocks=["power_on"], kind="error",
+         when="rf_power 숫자 · Caps.rf · 값 > RF 운전 상한(recipe_check.rf_operating_max — RF_OPERATING_MAX_W, 없으면 RF_MAX_POWER, "
+              "RF_MAX_POWER 보다 크지 않게) — R(D432)",
+         msg="{pre}: rf_power: {v:g} > {lim:g} W(운전 상한 RF_OPERATING_MAX_W)"),
     dict(id="pulse_exclusive", blocks=["power_on"], kind="error", when="dcp_power·rfp_power 둘 다 숫자",
          msg="{pre}: RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"),
     dict(id="rfp_freq_range", blocks=["power_on"], kind="error",
@@ -91,6 +95,8 @@ CFG_KEYS: tuple = (
 CFG_PLAIN_KEYS: tuple = (
     dict(key="CH2_HEATER_SV_LIMIT_C", default=900.0, use="히터 목표 상한"),
     dict(key="CH2_HEATER_MAX_TEMP", default=900.0, use="히터 목표 상한"),
+    dict(key="RF_MAX_POWER", default=600.0, use="RF 운전 상한의 위 한도(전원 정격)"),
+    dict(key="RF_OPERATING_MAX_W", default=None, use="CH2 RF 운전 상한(없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)"),
 )
 
 

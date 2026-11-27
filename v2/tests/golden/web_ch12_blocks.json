@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — 블록 검사·시퀀스 편집(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "13a46d6f493bd7b46575f14623567bdba6c12f7e07e2205e7fec164f24575a14",
+ "defsHash": "eef4864a577e15b938c92969df681489997d336cf4a30fd117d9c01b5a9bf6de",
  "defs": {
   "version": 1,
   "blocks": {
@@ -1166,6 +1166,15 @@
      "msg": "{pre}: {k}: 이 챔버는 {lab} 미지원"
     },
     {
+     "id": "rf_operating_max",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "rf_power 숫자 · Caps.rf · 값 > RF 운전 상한(recipe_check.rf_operating_max — RF_OPERATING_MAX_W, 없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)",
+     "msg": "{pre}: rf_power: {v:g} > {lim:g} W(운전 상한 RF_OPERATING_MAX_W)"
+    },
+    {
      "id": "pulse_exclusive",
      "blocks": [
       "power_on"
@@ -1674,6 +1683,16 @@
      "key": "CH2_HEATER_MAX_TEMP",
      "default": 900.0,
      "use": "히터 목표 상한"
+    },
+    {
+     "key": "RF_MAX_POWER",
+     "default": 600.0,
+     "use": "RF 운전 상한의 위 한도(전원 정격)"
+    },
+    {
+     "key": "RF_OPERATING_MAX_W",
+     "default": null,
+     "use": "CH2 RF 운전 상한(없으면 RF_MAX_POWER, RF_MAX_POWER 보다 크지 않게) — R(D432)"
     }
    ],
    "channelRule": "CH{n}_키 값이 null 이 아니면 그것, 아니면 키 값, 둘 다 null 이면 기본값. 목록·사전 기본값인 키는 글이면 JSON",
@@ -2271,6 +2290,8 @@
   "PROCESS_DEFAULT_BASE_PRESSURE": 1e-05,
   "PROCESS_DEFAULT_OES_INTEGRATION_MS": 60,
   "RFPULSE_FREQ_MAX_HZ": 30000,
+  "RF_MAX_POWER": 600.0,
+  "RF_OPERATING_MAX_W": 360.0,
   "SUPPORTS_DC": true,
   "SUPPORTS_DC2": false,
   "SUPPORTS_DCPULSE": true,
@@ -2351,6 +2372,10 @@
   {"name": "err_rfp_freq_cfg_common", "covers": ["cfg.common", "rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 12.5}}], "cfgOver": {"CH2_RFPULSE_FREQ_MAX_HZ": null, "RFPULSE_FREQ_MAX_HZ": 12000}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~12kHz 밖"], "warnings": [], "autoEndStop": null},
   {"name": "err_dcp_off", "covers": ["dcp_off_range", "format.int", "range.max"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 100, "dcp_off_us": 4.5}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 0.5}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 10.06}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 150, "dcp_off_us": 2.7}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 30, "dcp_off_us": 13.37}}, {"type": "power_on", "params": {"dcp_freq_khz": 200, "dcp_off_us": 9.0}}, {"type": "power_on", "params": {"dcp_freq_khz": 20.5, "dcp_off_us": 9.0}}, {"type": "power_on", "params": {"dcp_off_us": -3}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): DC Pulse Off Time 4.5µs 는 100kHz 상한 4.0µs 초과(매뉴얼 p.13 그림3)", "블록 2(power_on): DC Pulse Off Time 0.5µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)", "블록 3(power_on): DC Pulse Off Time 10.1µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)", "블록 5(power_on): DC Pulse Off Time 13.4µs 는 30kHz 상한 10.0µs 초과(매뉴얼 p.13 그림3)", "블록 6(power_on): dcp_freq_khz: 200 > 150", "블록 6(power_on): DC Pulse Off Time 9.0µs 는 200kHz 상한 2.0µs 초과(매뉴얼 p.13 그림3)", "블록 7(power_on): dcp_freq_khz: 정수여야 함", "블록 8(power_on): DC Pulse Off Time -3.0µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)"], "warnings": [], "autoEndStop": null},
   {"name": "err_dcp_off_bad_freq_skips", "covers": ["dcp_off_range"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": "x", "dcp_off_us": 12.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dcp_freq_khz: 숫자여야 함", "블록 1(power_on): DC Pulse Off Time 12.0µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rf_operating_max", "covers": ["cfg.default", "format.number", "rf_operating_max"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rf_power": 361.0}}, {"type": "power_on", "params": {"rf_power": 360.0}}, {"type": "power_on", "params": {"rf_power": "400"}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): rf_power: 361 > 360 W(운전 상한 RF_OPERATING_MAX_W)", "블록 3(power_on): rf_power: 숫자여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "rf_operating_max_cfg", "covers": ["cfg", "rf_operating_max"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rf_power": 450.0}}, {"type": "power_on", "params": {"rf_power": 550.0}}], "cfgOver": {"RF_OPERATING_MAX_W": 500.0}, "clean": null, "errors": ["블록 2(power_on): rf_power: 550 > 500 W(운전 상한 RF_OPERATING_MAX_W)"], "warnings": [], "autoEndStop": null},
+  {"name": "rf_operating_max_capped_by_rated", "covers": ["cfg", "rf_operating_max"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rf_power": 450.0}}], "cfgOver": {"RF_OPERATING_MAX_W": 500.0, "RF_MAX_POWER": 400.0}, "clean": null, "errors": ["블록 1(power_on): rf_power: 450 > 400 W(운전 상한 RF_OPERATING_MAX_W)"], "warnings": [], "autoEndStop": null},
+  {"name": "rf_operating_max_key_missing", "covers": ["cfg", "rf_operating_max"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rf_power": 599.0}}, {"type": "power_on", "params": {"rf_power": 601.0}}], "cfgOver": {"RF_OPERATING_MAX_W": null}, "clean": null, "errors": ["블록 2(power_on): rf_power: 601 > 600 W(운전 상한 RF_OPERATING_MAX_W)"], "warnings": [], "autoEndStop": null},
   {"name": "err_heater_limit", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 900.5}}, {"type": "heater_set", "params": {"target_c": 450.0}}], "cfgOver": {"CH2_HEATER_MAX_TEMP": 400.0}, "clean": null, "errors": ["블록 1(heater_set): target_c: 900.5 > 400°C", "블록 2(heater_set): target_c: 450 > 400°C"], "warnings": [], "autoEndStop": null},
   {"name": "err_heater_limit_sv", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 600.0}}], "cfgOver": {"CH2_HEATER_SV_LIMIT_C": 0, "CH2_HEATER_MAX_TEMP": 700}, "clean": null, "errors": ["블록 1(heater_set): target_c: 600 > 500°C"], "warnings": [], "autoEndStop": null},
   {"name": "err_heater_limit_max_over_sv", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 850.0}}], "cfgOver": {"CH2_HEATER_SV_LIMIT_C": 800.0, "CH2_HEATER_MAX_TEMP": 1000.0}, "clean": null, "errors": ["블록 1(heater_set): target_c: 850 > 800°C"], "warnings": [], "autoEndStop": null},

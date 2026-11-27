@@ -61,7 +61,7 @@ def test_value_rules_each_fire():
              "ch1_no_n2": "CH1 은 N2 라인 없음", "shutter_gun_exists": "없는 건 셔터", "power_cap": "미지원",
              "pulse_exclusive": "동시에 사용할 수 없습니다", "rfp_freq_range": "rfp_freq_khz: 허용 범위",
              "dcp_off_range": "DC Pulse Off Time", "heater_limit": "°C", "main_change_together": "함께 넣어야 함",
-             "heater_wait_target": "펼치기 실패: 히터 도달 대기"}
+             "heater_wait_target": "펼치기 실패: 히터 도달 대기", "rf_operating_max": "W(운전 상한 RF_OPERATING_MAX_W)"}
     assert set(marks) == {r["id"] for r in WB.VALUE_RULES}
     for rid, m in marks.items():
         pool = [x for c in d["blockCases"] + d["editCases"] if rid in c["covers"] for x in c["errors"] + c["warnings"]]
