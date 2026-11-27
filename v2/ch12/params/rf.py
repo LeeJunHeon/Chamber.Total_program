@@ -7,7 +7,7 @@ device/rf_power.py:67-68). 그래서 ch2.RF_REFLECTED_THRESHOLD_W 는 읽히지 
 """
 from __future__ import annotations
 
-from ._base import B, F, H, I, L, M, Dropped, need, p, rule
+from ._base import B, F, H, I, L, LIVE, M, Dropped, need, p, rule
 
 _G = "rf"
 
@@ -33,6 +33,11 @@ PARAMS: tuple = (
       src="v2(W-21·22 대조 B — 챔버K 실장비 시험 2026-11-25)",
       desc="CH2 RF·Plasma Cleaning RF 가 명령 출력(SET 래치 켜짐 그리고 쓰기값 > 0 또는 모름)이 아닌데 Forward 가 이 값 이상이면 '명령 없는 RF 출력'"
            "(스냅샷 rf.uncommanded·사건 시작/끝 한 번씩). 화면은 명령 출력도 명령 없는 출력도 아니면 Forward·Reflected 를 0 W·꺼짐으로 보인다"),
+    p("RF_UNCOMMANDED_GRACE_SEC", _G, "RF 끈 뒤 명령 없는 출력 유예", "s", F, 5.0, 0.0, 30.0, safety=M, apply=LIVE,
+      src="v2(N — 챔버K 와 같은 설정, 예전 drivers/rf.py 고정값 UNCMD_GRACE_S 5 s)",
+      desc="프로그램이 RF 를 끈 뒤 이 시간 동안은 Forward 가 남아 있어도 꺼지는 중으로 보고 '명령 없는 RF 출력'으로 보지 않습니다. "
+           "0 이면 끈 바로 다음 읽기부터 판정합니다",
+      note="CH2 RF·Plasma Cleaning RF 둘 다. rf.cmd_on 이 참이었던 마지막 PLC 읽기 시각부터 잰다(drivers/rf.py _decode)"),
     p("RF_REFLECTED_HYST_W", _G, "Ref.p 대기 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, src="v2(W-21·22 대조 A — 챔버K 실장비 시험 2026-11-25)",
       desc="Ref.p 안정화 대기는 REF > 감시 임계면 시작하고 'REF ≤ 임계 − 이 값' 이어야 풀린다. 그 사이면 대기를 이어 가고 시간은 대기 시작부터 "
            "이어서 센다(임계를 오가도 시간 초과가 난다). 0 = v1 그대로(임계 이하면 곧바로 풀림)"),

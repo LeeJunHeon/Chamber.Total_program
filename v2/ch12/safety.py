@@ -17,7 +17,7 @@ S37 통신 끊김 공정 중단(v1 에 없음 — 사용자 결정 2026-11-26): 
   센다 — 행 품질 fail(또는 링크가 끊긴 채 stale)인 행이면 앞 행부터의 시간만큼 늘고, ok·late 행이면 0, 명령에 양보해 건너뛴 stale(링크
   살아 있음)·suppressed·off 행은 그대로(세지도 지우지도 않음 — 로봇 PLC 명령이 길게 이어져도 중단 안 됨). comm_loss 는 챔버 공정이
   전원 켜기 단계(POWER_ON_ACTIONS)를 시작한 뒤·정지 순서 전(power_armed)에만 PLC ≥ PLC_COMM_LOSS_ABORT_SEC 또는 그 챔버 MFC ≥
-  MFC_COMM_LOSS_ABORT_SEC 면 경고 사건 1번 + engine.abort(PLC_COMM_LOST·MFC_COMM_LOSS) — 지금 abort 경로(정지 순서) 그대로.
+  MFC_COMM_LOSS_ABORT_SEC 면 경고 사건 1번 + engine.abort(PLC_COMM_LOST·MFC_COMM_LOST) — 지금 abort 경로(정지 순서) 그대로.
   Plasma Cleaning 은 PC RF 가 켜진 동안(pc_armed) 같은 규칙(PC 가 쓰는 챔버 MFC) → pc.abort. 0 = 끔.
 S39 펄스 전원 통신 끊김 중단(v1 에 없음 — 사용자 결정 2026-11-27, P · S37 과 같은 방식): comm_track 이 chN.rfpulse·chN.dcpulse 의
   '정상으로 읽히지 않은 시간'도 센다(쓰지 않는 펄스 장비 — 포트를 잡지 않아 off 품질 — 는 0). 챔버 공정이 그 전원의 출력을 켠 뒤
@@ -241,7 +241,7 @@ class Ch12Safety:
         lim = self._comm_limit("MFC_COMM_LOSS_ABORT_SEC")
         dev = f"{ch}.mfc"
         if ch and lim > 0 and dev in self.comm_lost_s and self.comm_lost_s[dev] >= lim:
-            return "MFC_COMM_LOSS", f"{ch.upper()} MFC", self.comm_lost_s[dev], lim
+            return "MFC_COMM_LOST", f"{ch.upper()} MFC", self.comm_lost_s[dev], lim
         return None
 
     def _pulse_hit(self, ch: str, e) -> Optional[tuple]:

@@ -271,7 +271,7 @@ class App:
     def _start_lines(self) -> List[str]:
         c, st = self.cfg, self.store
         mode = RunMode(c["RUN_MODE"])
-        nas = c.get("NAS_COPY_DIR") if policy(mode).nas_copy and c.get("NAS_COPY_DIR") else "끔"
+        nas = c.get("NAS_COPY_DIR") if policy(mode).nas_copy and c.get("NAS_COPY_DIR") else "사용하지 않음"     # N(챔버K 말) — 예전 '끔'
         iso = [f"sim 격리 — 모든 출력은 {sim_guard.sim_out()} 아래 · 127.0.0.1 만 · 로봇 서버 시험 포트 {c.get('HOST_SERVER_PORT')}"] \
             if mode is RunMode.SIM else []
         return iso + [f"챔버12 v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",

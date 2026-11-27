@@ -985,4 +985,13 @@ DECISIONS += [
          where="v2/ch12/safety.py(PULSE_DEVS·pulse_armed·_pulse_hit·pulse_reconnect); v2/ch12/safety_rules.py(S39·S40); "
                "v2/ch12/process_runner.py(_lost_skip); v2/ch12/process_engine.py(pulse_down); v2/ch12/drivers/pulse_port.py(hold); "
                "v2/ch12/params/rfpulse.py·dcpulse.py; v2/ch12/commands.py; v2/tests/test_pulse_comm_loss.py"),
+    dict(id="D434", title="2026-11-27 챔버K 와 이름·말 맞추기 — MFC_COMM_LOST·'끊김'·NAS 사본 사용하지 않음·RF_UNCOMMANDED_GRACE_SEC(N)",
+         decision="① 사유 코드 MFC_COMM_LOSS 를 MFC_COMM_LOST 로(설정 키 MFC_COMM_LOSS_ABORT_SEC 는 그대로, 운전자용 설명은 챔버K 글 'MFC 와 "
+                  "통신이 끊겨 공정을 멈췄습니다…'). 옛 코드는 묶음에서 지운다(챔버K 묶음 25 와 같게). ② 화면·콘솔에 나가는 글의 '두절'을 "
+                  "'끊김'으로(설정 설명 MFC 재연결 간격, 안전 규칙 S8 글), 콘솔 시작 줄 'NAS 사본 끔' 을 'NAS 사본 사용하지 않음'으로. 주석·"
+                  "spec 의 v1 사실 글·공정 txt 의 v1 문구는 그대로. ③ drivers/rf.py 의 고정값 UNCMD_GRACE_S(5 s)를 설정 RF_UNCOMMANDED_GRACE_SEC"
+                  "(기본 5, 0~30, M·LIVE — 챔버K 와 같은 이름·이름표)로. 기본값에서 동작은 같다.",
+         reason="사용자 결정 2026-11-27(N)", confirm=False,
+         where="v2/ch12/commands.py; v2/ch12/safety.py·safety_rules.py; v2/ch12/params/mfc.py·rf.py; v2/ch12/app.py(_start_lines); "
+               "v2/ch12/drivers/rf.py(_decode); v2/tests/test_names_like_chk.py·test_comm_loss.py"),
 ]

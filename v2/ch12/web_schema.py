@@ -95,6 +95,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      P: 안전 규칙 S39 펄스 전원 통신 끊김 중단(v1 에 없음 — 사용자 결정 2026-11-27)·S40 펄스 재연결 뒤 끄기, params
      RFPULSE_COMM_LOSS_ABORT_SEC·DCPULSE_COMM_LOSS_ABORT_SEC(30 s, 0 = 끔), 사유 RFP_COMM_LOST·DCP_COMM_LOST(safety fired S39 warn 한 번 ·
      run_end 사유), S40 info RESIDUAL_POWER_OFF(끄기를 다시 보냄 한 번). 정지 순서는 끊긴 펄스의 꺼짐 확인을 기다리지 않는다(D433).
+     N: 챔버K 와 이름·말 맞추기 — 사유 MFC_COMM_LOSS 를 지우고 MFC_COMM_LOST(설정 키 MFC_COMM_LOSS_ABORT_SEC 는 그대로, help 는 챔버K 글),
+     화면 글 '두절' → '끊김'(MFC 재연결 간격 설명·규칙 S8 글), params RF_UNCOMMANDED_GRACE_SEC(5 s, 0~30 — 예전 고정값 UNCMD_GRACE_S)(D434).
 """
 from __future__ import annotations
 

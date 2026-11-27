@@ -40,7 +40,6 @@ NORMAL_KICK = dict(kick_th=100.0, kick_w=50.0, cut_w=50.0)
 INITIAL_STEP_W = 1.0
 MAINTAIN_NEED = 2
 LATCH_HOLD_S = 3.0          # H1 — 래치를 못 읽은 tick(명령 양보)에 마지막 래치 값을 쓰는 시간
-UNCMD_GRACE_S = 5.0         # 명령으로 끈 뒤 이 시간 안의 Forward 는 꺼지는 중(명령 없는 출력으로 보지 않음)
 
 BUDGET = dict(queries_per_tick=0, bytes_tx=0, bytes_rx=0, min_gap_ms=150, fits_1s=True, alternate="",
               note="읽기는 PLC 1초 묶음(D0..D11)에 포함. 쓰기만 PLC worker 로(램프 중 측정마다 최대 1회, 정지 1 s 마다 1회)")
@@ -92,7 +91,7 @@ class RfPower:
         self._ref_wait_open = False          # 반사파 대기 사건 시작을 냈고 끝을 아직 안 냄(W-21·22 A — 시작·끝 한 번씩)
         self._uncmd = False                  # 명령 없는 RF 출력 사건 시작을 냈음(W-21·22 B — 시작·끝 한 번씩)
         self._latch_seen: Optional[tuple] = None   # (마지막으로 읽은 SET 래치, 읽은 시각) — H1 양보한 tick 은 LATCH_HOLD_S 까지 이 값
-        self._cmd_on_t: Optional[float] = None     # 마지막으로 명령 출력(cmd_on)이었던 시각 — 끈 직후 UNCMD_GRACE_S 는 꺼지는 중
+        self._cmd_on_t: Optional[float] = None     # 마지막으로 명령 출력(cmd_on)이었던 시각 — 끈 직후 RF_UNCOMMANDED_GRACE_SEC 는 꺼지는 중
         self.output_off_unconfirmed = False
         self.polling = True
         self._due: Optional[float] = None
@@ -387,7 +386,8 @@ class RfPower:
         meas = rf_scale(self.cfg, fr, rr, self.rf_ch, zero)
         out.update({f"{b}.fwd_w": meas["forward"], f"{b}.ref_w": meas["reflected"]})
         th_u = float(self._g("RF_UNCOMMANDED_FWD_W", 5.0) or 5.0)
-        settling = self._cmd_on_t is not None and t - self._cmd_on_t < UNCMD_GRACE_S   # 명령으로 끈 직후 — A/D 가 내려가는 중
+        grace = max(0.0, float(self._g("RF_UNCOMMANDED_GRACE_SEC", 5.0)))      # N — 예전 고정값 UNCMD_GRACE_S 5 s(챔버K 와 같은 설정)
+        settling = self._cmd_on_t is not None and t - self._cmd_on_t < grace   # 명령으로 끈 직후 — A/D 가 내려가는 중
         unc = None if cmd_on is None else (not cmd_on and not settling and float(meas["forward"]) >= th_u)
         out[f"{b}.uncommanded"] = unc
         self._uncommanded_track(unc, meas["forward"], th_u)

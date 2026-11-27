@@ -77,7 +77,7 @@ CH12_REASONS: tuple = (
     Reason("PROGRAM_EXIT", "프로그램 종료", "abort"),
     Reason("PROGRAM_RESTART", "재시작 뒤 이어가기 불가", "abort"),
     Reason("PLC_COMM_LOST", "PLC 통신 끊김", "abort"),
-    Reason("MFC_COMM_LOSS", "MFC 통신 끊김", "abort"),
+    Reason("MFC_COMM_LOST", "MFC 통신 끊김", "abort"),
     Reason("RFP_COMM_LOST", "RF Pulse 통신 끊김", "abort"),
     Reason("DCP_COMM_LOST", "DC Pulse 통신 끊김", "abort"),
     # 안전 엔진 알림
@@ -164,7 +164,7 @@ REASON_HELP: Dict[str, str] = {
     "RECIPE_PARAM_ERROR": "시작 직전에 레시피 값이 규칙에 맞지 않았습니다. 레시피를 고치세요.",
     "PROGRAM_EXIT": "프로그램이 닫혀 파워 출력을 껐습니다. 펌프·밸브는 그대로입니다.",
     "PLC_COMM_LOST": "PLC 와 통신이 끊긴 채 이어져 공정을 멈췄습니다. 랜 케이블과 전원을 확인하세요.",
-    "MFC_COMM_LOSS": "MFC 와 통신이 끊긴 채 이어져 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
+    "MFC_COMM_LOST": "MFC 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
     "RFP_COMM_LOST": "RF Pulse 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
     "DCP_COMM_LOST": "DC Pulse 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요.",
     "PROGRAM_RESTART": "프로그램을 다시 켰지만 이어갈 조건이 맞지 않아 정지 순서를 실행했습니다.",

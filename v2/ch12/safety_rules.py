@@ -103,7 +103,7 @@ RULES: Tuple[Rule, ...] = (
     R("S7", "MFC 명령 실패 → 공정 중단", "trip", "event:mfc_command_failed",
       "지금 기다리는 MFC 명령의 실패만 중단(다른 것은 '경고(무시)')", "chamber", "process_events(MFC) → StepRunner.mfc_failed",
       "controller/process_controller.py:838-860 (PROC-164)", states=RUN, actions=(_abort("PROCESS_FAILED"),)),
-    R("S8", "IG 베이스 압력 실패 → 공정 중단", "trip", "event:ig_base_failed", "IG base_failed(도달 실패·두절)", "chamber",
+    R("S8", "IG 베이스 압력 실패 → 공정 중단", "trip", "event:ig_base_failed", "IG base_failed(도달 실패·끊김)", "chamber",
       "process_events(IG) → StepRunner.step_failed", "runtime/chamber_runtime.py:2274-2284 (PROC-165)", states=RUN,
       actions=(_abort("PROCESS_FAILED"),)),
     R("S9", "DC 연속 과전류·출력 이상 → 공정 중단", "trip", "event:dc_target_failed",
@@ -232,7 +232,7 @@ RULES: Tuple[Rule, ...] = (
       "0 으로, 명령에 양보해 건너뛴 stale(링크 살아 있음)·suppressed 행은 세지 않는다. 전원을 켜기 전 단계는 판정하지 않는다. 0 = 끔",
       "chamber", "safety.Ch12Safety.comm_loss", "v1 에 없음 — 사용자 결정 2026-11-26(F · 챔버K 와 같은 설정 이름)",
       ("PLC_COMM_LOSS_ABORT_SEC", "MFC_COMM_LOSS_ABORT_SEC"), "PLC 15 s · MFC 30 s", states=RUN,
-      actions=(_abort("PLC_COMM_LOST"), _abort("MFC_COMM_LOSS"), _note("warn", "PLC_COMM_LOST")), reason="PLC_COMM_LOST"),
+      actions=(_abort("PLC_COMM_LOST"), _abort("MFC_COMM_LOST"), _note("warn", "PLC_COMM_LOST")), reason="PLC_COMM_LOST"),
     R("S38", "PLC 재연결 뒤 남은 파워 정리", "recover", "event:plc_reconnect",
       "PLC 링크가 끊겼다가 다시 연결된 뒤 공정·운전(챔버·PC·TSP)이 없는 첫 정상 PLC 행에서 S31 과 같은 남은 전원 확인 — PLC D/A "
       "전원(CH2 DC1·DC2·CH2 RF·PC RF)이 켜져 있으면 그 전원만 끈다. 공정·운전 중이면 아무것도 하지 않는다(알림 없음 — 모두 대기가 될 "

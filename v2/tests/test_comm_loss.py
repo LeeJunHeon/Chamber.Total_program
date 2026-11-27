@@ -102,8 +102,8 @@ def test_mfc_loss_29s_continues_31s_aborts_own_chamber_only():
     assert e1.aborts == [] and e2.aborts == []
     _feed(sf, s, 1, m1="ok")
     _feed(sf, s, 31, m1="fail")
-    assert e1.aborts == ["MFC_COMM_LOSS"] and e2.aborts == []      # 그 챔버 MFC 만
-    assert _s37(sf) == [("fired", "MFC_COMM_LOSS", "warn")]
+    assert e1.aborts == ["MFC_COMM_LOST"] and e2.aborts == []      # 그 챔버 MFC 만
+    assert _s37(sf) == [("fired", "MFC_COMM_LOST", "warn")]
 
 
 def test_zero_setting_is_current_behaviour():
@@ -154,7 +154,7 @@ def test_plasma_cleaning_while_pc_rf_on():
     assert pc.aborts == []                                        # PC RF 가 꺼져 있으면 판정하지 않는다
     s.rf["pc"].running = True
     _feed(sf, s, 1, m2="fail")
-    assert pc.aborts == ["MFC_COMM_LOSS"]                         # PC 가 쓰는 챔버(CH2) MFC
+    assert pc.aborts == ["MFC_COMM_LOST"]                         # PC 가 쓰는 챔버(CH2) MFC
     ev = [e for e in sf.events if e.rule == "S37"]
     assert len(ev) == 1 and ev[0].detail.startswith("Plasma Cleaning")
 

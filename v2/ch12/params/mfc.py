@@ -52,7 +52,7 @@ PARAMS: tuple = (
     inst("MFC_RECONNECT_BACKOFF_START_MS", "mfc", "MFC 재연결 첫 간격", I, 1000, lo=100, hi=60000, unit="ms",
          src=f"{_S}:162;{_C}:275;device/mfc.py:1249-1301", note=_W),
     inst("MFC_RECONNECT_BACKOFF_MAX_MS", "mfc", "MFC 재연결 최대 간격", I, 20000, lo=1000, hi=600000, unit="ms",
-         src=f"{_S}:163;{_C}:276;device/mfc.py:1301", desc="실패마다 ×2, 이 값까지(장기 두절 뒤에도 이 간격)", note=_W),
+         src=f"{_S}:163;{_C}:276;device/mfc.py:1301", desc="실패마다 ×2, 이 값까지(오래 끊긴 뒤에도 이 간격)", note=_W),
     # ───────── 통신 간격·응답 ─────────
     _m("MFC_TIMEOUT", "MFC 질의 응답 제한", "ms", I, 2000, 200, 10000, src=f"{_S}:164;{_C}:278;device/mfc.py:1414-1437",
        desc="질의 한 줄을 기다리는 시간. 넘으면(연결 뒤 2 s 밖) 연결을 끊고 재연결(v1 — D182)", note=_W),
