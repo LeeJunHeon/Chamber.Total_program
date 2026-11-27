@@ -1013,4 +1013,11 @@ DECISIONS += [
          reason="사용자 지시 2026-11-27(B)", confirm=False,
          where="v2/ch12/uplink.py(bye·_post_lock·send_once); v2/ch12/app.py(_teardown·on_console·CONSOLE_EXIT_BUDGET_S); "
                "v2/tests/test_uplink_bye.py·fake_web.py"),
+    dict(id="D437", title="2026-11-27 전원 설정을 읽지 못하면 상세 사건 1번(U, 챔버K W-25 와 같은 이름·글)",
+         decision="check_power 가 윈도우 전원 설정을 읽다 예외가 나면 시작 줄·경고 없이 상세 사건 1번: selfwatch/power_settings_unread "
+                  "(info, 글 '윈도우 전원 설정을 읽지 못함(<예외 이름>)'). eventKinds level detail — 평소 보기에 나오지 않는다. "
+                  "출처는 챔버12 의 power_settings 와 같은 selfwatch(챔버K 는 app). 윈도우가 아니면 지금처럼 아무것도 하지 않는다. 묶음 20.",
+         reason="사용자 지시 2026-11-27(U)", confirm=False,
+         where="v2/ch12/keep_awake.py(check_power on_unread); v2/ch12/app.py(start_keep_awake); v2/ch12/web_schema.py(eventKinds·묶음 20); "
+               "v2/tests/test_power_settings.py·test_web_schema.py(PINNED)"),
 ]

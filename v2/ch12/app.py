@@ -423,7 +423,8 @@ class App:
                                     api=windows_api())
         self.keep_awake.start()
         check_power(self.power_reader(), lambda line: self.warn_once(line, "%s", line),
-                    lambda msg, _data: s.emit("selfwatch", "power_settings", msg, level="warn", code="POWER_SETTINGS"))
+                    lambda msg, _data: s.emit("selfwatch", "power_settings", msg, level="warn", code="POWER_SETTINGS"),
+                    lambda msg: s.emit("selfwatch", "power_settings_unread", msg))       # U: 못 읽음 — 상세 사건만(info)
 
     def power_reader(self):
         """윈도우 전원 설정 읽기 함수(W) — 윈도우가 아니면 None. 시험은 이 메서드를 가짜로 바꾼다."""

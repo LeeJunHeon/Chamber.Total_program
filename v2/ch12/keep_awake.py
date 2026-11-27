@@ -77,13 +77,20 @@ def power_warning(info: Optional[PowerInfo]) -> Optional[str]:
 
 
 def check_power(reader: Optional[Callable[[], PowerInfo]], say: Callable[[str], None],
-                on_event: Optional[Callable[[str, dict], None]] = None) -> Optional[str]:
-    """시작 때 한 번 — 읽어서 위험하면 시작 줄 한 줄 + 경고 사건 1번(on_event(글, 값)). 윈도우가 아니면(reader None)·못 읽으면 조용히."""
+                on_event: Optional[Callable[[str, dict], None]] = None,
+                on_unread: Optional[Callable[[str], None]] = None) -> Optional[str]:
+    """시작 때 한 번 — 읽어서 위험하면 시작 줄 한 줄 + 경고 사건 1번(on_event(글, 값)). 윈도우가 아니면(reader None) 아무것도,
+    못 읽으면 시작 줄 없이 상세 사건 1번(on_unread(글) — power_settings_unread, 챔버K W-25 와 같은 이름·글)."""
     if reader is None:
         return None
     try:
         info = reader()
-    except Exception:
+    except Exception as e:
+        if on_unread:
+            try:
+                on_unread(f"윈도우 전원 설정을 읽지 못함({type(e).__name__})")
+            except Exception:
+                pass
         return None
     msg = power_warning(info)
     if msg:

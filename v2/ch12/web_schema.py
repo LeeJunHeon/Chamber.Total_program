@@ -100,6 +100,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      화면 글 '두절' → '끊김'(MFC 재연결 간격 설명·규칙 S8 글), params RF_UNCOMMANDED_GRACE_SEC(5 s, 0~30 — 예전 고정값 UNCMD_GRACE_S)(D434).
      W: 윈도우 전원 설정 경고 — 시작 때 읽기만, 위험하면 eventKinds selfwatch/power_settings(warn — 평소 로그), 사유 POWER_SETTINGS(info —
      챔버K 와 같은 이름·글)(D435).
+  20 2026-11-27 챔버K W-25 와 맞추기(BUCZ) — U: eventKinds selfwatch/power_settings_unread(상세 — 전원 설정을 읽지 못함, 챔버K 와 같은
+     이름·글, 시작 줄 없음)(D437).
 """
 from __future__ import annotations
 
@@ -115,7 +117,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 19
+EXPORT_VERSION = 20
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -181,7 +183,8 @@ EVENT_KINDS: tuple = (
     ("rga", "data", "RGA 값", _D), ("rga", "status", "RGA 상태", _D),
     ("selfwatch", "selfwatch", "프로그램 자기 감시", _M),
     ("selfwatch", "keep_awake_on", "절전 막기 시작", _D), ("selfwatch", "keep_awake_off", "절전 막기 끝", _D),
-    ("selfwatch", "power_settings", "장비 노트북 전원 설정", _M), ("outputs", "internal_error", "기록 출력 오류", _M),
+    ("selfwatch", "power_settings", "장비 노트북 전원 설정", _M), ("selfwatch", "power_settings_unread", "전원 설정 읽기 실패", _D),
+    ("outputs", "internal_error", "기록 출력 오류", _M),
     ("uplink", "uplink_down", "웹 연결 끊김", _M), ("uplink", "uplink_up", "웹 연결 다시 됨", _M),
     ("uplink", "uplink_auth_failed", "웹 토큰 거부", _M), ("uplink", "uplink_conflict", "웹이 이 실행을 받지 않음", _M),
     ("uplink", "uplink_too_large", "웹이 받지 않는 큰 메시지", _M), ("uplink", "uplink_spool_full", "웹 보관함 가득", _M),
